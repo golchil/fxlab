@@ -22,6 +22,7 @@ class Dataset(Base):
     jobs: Mapped[list["Job"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     windows: Mapped[list["Window"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     labels: Mapped[list["Label"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    window_images: Mapped[list["WindowImage"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -97,6 +98,7 @@ class Window(Base):
     bar_count: Mapped[int] = mapped_column(Integer)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="windows")
+    image: Mapped[Optional["WindowImage"]] = relationship(back_populates="window", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_windows_dataset", "dataset_id"),
@@ -121,4 +123,25 @@ class Label(Base):
 
     __table_args__ = (
         Index("ix_labels_dataset", "dataset_id"),
+    )
+
+
+class WindowImage(Base):
+    __tablename__ = "window_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    window_id: Mapped[int] = mapped_column(ForeignKey("windows.id", ondelete="CASCADE"), unique=True)
+    image_key: Mapped[str] = mapped_column(String(512))  # MinIO object key
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    ma_periods: Mapped[str] = mapped_column(String(128))  # e.g., "5,20,60"
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship(back_populates="window_images")
+    window: Mapped["Window"] = relationship(back_populates="image")
+
+    __table_args__ = (
+        Index("ix_window_images_dataset_created", "dataset_id", "created_at"),
+        Index("ix_window_images_dataset_window", "dataset_id", "window_id"),
     )

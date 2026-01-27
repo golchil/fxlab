@@ -6,7 +6,8 @@ import pytz
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage
+from app.config import settings as app_settings
 
 celery_app = Celery(
     "fxlab",
@@ -423,6 +424,174 @@ def generate_labels_task(
         db.commit()
 
         return {"total_labels": labels_created}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def generate_window_images_task(
+    self, job_id: int, dataset_id: int, lookback_n: int,
+    ma_periods: list = None, limit: int = None,
+    start_ts: str = None, end_ts: str = None, overwrite: bool = False
+):
+    """
+    Generate candlestick chart images for windows.
+    """
+    from app.services.minio_client import upload_image, ensure_bucket_exists
+    from app.services.image_generator import generate_candlestick_image
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        if ma_periods is None:
+            ma_periods = app_settings.default_ma_periods
+
+        # Ensure MinIO bucket exists
+        ensure_bucket_exists()
+
+        # Build window query
+        query = db.query(Window).filter(
+            Window.dataset_id == dataset_id,
+            Window.lookback_n == lookback_n
+        )
+
+        # Parse timestamps if provided
+        filter_start_ts = None
+        filter_end_ts = None
+        if start_ts:
+            filter_start_ts = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Window.end_ts >= filter_start_ts)
+        if end_ts:
+            filter_end_ts = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Window.end_ts <= filter_end_ts)
+
+        query = query.order_by(Window.end_ts)
+
+        if limit:
+            query = query.limit(limit)
+
+        windows = query.all()
+
+        if not windows:
+            job.status = "completed"
+            job.result = json.dumps({
+                "generated_count": 0,
+                "skipped_count": 0,
+                "message": "No windows found",
+            })
+            db.commit()
+            return {"generated_count": 0}
+
+        # Get all bars for this dataset for efficiency
+        all_bars = db.query(Bar).filter(Bar.dataset_id == dataset_id).order_by(Bar.ts).all()
+
+        # Create lookup by timestamp
+        bars_by_ts = {b.ts: b for b in all_bars}
+        sorted_bar_times = sorted(bars_by_ts.keys())
+
+        generated_count = 0
+        skipped_count = 0
+        actual_start_ts = None
+        actual_end_ts = None
+        batch_size = 100
+        image_size = app_settings.image_size
+        ma_periods_str = ",".join(map(str, ma_periods))
+
+        for i, window in enumerate(windows):
+            # Check if image already exists
+            existing = db.query(WindowImage).filter(WindowImage.window_id == window.id).first()
+            if existing and not overwrite:
+                skipped_count += 1
+                continue
+
+            # Track actual range
+            if actual_start_ts is None or window.end_ts < actual_start_ts:
+                actual_start_ts = window.end_ts
+            if actual_end_ts is None or window.end_ts > actual_end_ts:
+                actual_end_ts = window.end_ts
+
+            # Get bars for this window
+            # Find bars in range [start_ts, end_ts]
+            window_bars = []
+            for ts in sorted_bar_times:
+                if window.start_ts <= ts <= window.end_ts:
+                    bar = bars_by_ts[ts]
+                    window_bars.append((bar.ts, bar.open, bar.high, bar.low, bar.close))
+
+            if len(window_bars) < lookback_n:
+                skipped_count += 1
+                continue
+
+            # Take exactly lookback_n bars
+            window_bars = window_bars[-lookback_n:]
+
+            # Generate image
+            try:
+                image_bytes = generate_candlestick_image(
+                    bars=window_bars,
+                    ma_periods=ma_periods,
+                    image_size=image_size,
+                )
+            except Exception as e:
+                # Skip on image generation error
+                skipped_count += 1
+                continue
+
+            # Create image key
+            image_key = f"dataset_{dataset_id}/windows/{window.id:08d}.png"
+
+            # Upload to MinIO
+            upload_image(image_key, image_bytes)
+
+            # Upsert to database
+            if existing:
+                existing.image_key = image_key
+                existing.width = image_size
+                existing.height = image_size
+                existing.ma_periods = ma_periods_str
+                existing.created_at = datetime.utcnow()
+            else:
+                window_image = WindowImage(
+                    dataset_id=dataset_id,
+                    window_id=window.id,
+                    image_key=image_key,
+                    width=image_size,
+                    height=image_size,
+                    ma_periods=ma_periods_str,
+                )
+                db.add(window_image)
+
+            generated_count += 1
+
+            # Commit in batches
+            if generated_count % batch_size == 0:
+                db.commit()
+
+        # Final commit
+        db.commit()
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "generated_count": generated_count,
+            "skipped_count": skipped_count,
+            "generation_start_ts": actual_start_ts.isoformat() if actual_start_ts else None,
+            "generation_end_ts": actual_end_ts.isoformat() if actual_end_ts else None,
+        })
+        db.commit()
+
+        return {"generated_count": generated_count, "skipped_count": skipped_count}
 
     except Exception as e:
         job = db.query(Job).filter(Job.id == job_id).first()

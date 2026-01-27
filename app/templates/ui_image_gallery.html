@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - {{ dataset.name }} Images{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>{{ dataset.name }} - Image Gallery</h1>
+        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; Back to Dataset</a>
+    </div>
+
+    <div class="gallery-controls">
+        <div class="filter-bar">
+            <span>Filter by label:</span>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=all" class="btn btn-small {% if label == 'all' %}btn-primary{% endif %}">All</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit" class="btn btn-small {% if label == 'tp_hit' %}btn-primary{% endif %}">TP Hit</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">SL Hit</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">Neither</a>
+        </div>
+        <div class="gallery-info">
+            <span>{{ total }} images | Page {{ page }}/{{ total_pages }}</span>
+        </div>
+    </div>
+
+    {% if images %}
+    <div class="gallery-grid">
+        {% for img in images %}
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ img.id }}?label={{ label }}" class="gallery-item">
+            <img src="{{ img.image_url }}" alt="Window {{ img.window_id }}" loading="lazy">
+            <div class="gallery-item-info">
+                <span class="gallery-ts">{{ img.end_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+                {% if img.label_result %}
+                <span class="label-badge label-{{ img.label_result }}">{{ img.label_result }}</span>
+                {% endif %}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}" class="btn">&larr; Previous</a>
+        {% else %}
+        <span class="btn btn-disabled">&larr; Previous</span>
+        {% endif %}
+
+        <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
+
+        {% if page < total_pages %}
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}" class="btn">Next &rarr;</a>
+        {% else %}
+        <span class="btn btn-disabled">Next &rarr;</span>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="empty-state">No images found. <a href="/ui/datasets/{{ dataset.id }}">Generate images</a> first.</p>
+    {% endif %}
+</div>
+{% endblock %}

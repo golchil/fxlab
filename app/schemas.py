@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
 
@@ -100,3 +100,63 @@ class LabelsStatsResponse(BaseModel):
 class JobCreatedResponse(BaseModel):
     job_id: int
     message: str
+
+
+# Image generation request
+class ImagesRequest(BaseModel):
+    lookback_n: int = 128
+    ma_periods: List[int] = [5, 20, 60]
+    limit: Optional[int] = None
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+    overwrite: bool = False
+
+
+# Image stats response
+class ImagesStatsResponse(BaseModel):
+    total_images: int
+    latest_created_at: Optional[datetime] = None
+    last_generation_params: Optional[str] = None
+    generated_count: Optional[int] = None
+    generation_start_ts: Optional[datetime] = None
+    generation_end_ts: Optional[datetime] = None
+
+
+# Image list item
+class ImageListItem(BaseModel):
+    id: int
+    window_id: int
+    end_ts: datetime
+    image_url: str
+    label_result: Optional[str] = None  # tp_hit, sl_hit, neither
+
+    class Config:
+        from_attributes = True
+
+
+# Image list response with pagination
+class ImageListResponse(BaseModel):
+    items: List[ImageListItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+# Image detail response
+class ImageDetailResponse(BaseModel):
+    id: int
+    window_id: int
+    dataset_id: int
+    image_key: str
+    width: int
+    height: int
+    ma_periods: str
+    created_at: datetime
+    window_start_ts: datetime
+    window_end_ts: datetime
+    lookback_n: int
+    label_result: Optional[str] = None
+
+    class Config:
+        from_attributes = True

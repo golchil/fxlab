@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - Image #{{ image.id }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>Image #{{ image.id }}</h1>
+        <a href="/ui/datasets/{{ dataset.id }}/images?label={{ current_label }}" class="btn">&larr; Back to Gallery</a>
+    </div>
+
+    <div class="image-nav">
+        {% if prev_id %}
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ prev_id }}?label={{ current_label }}" class="btn">&larr; Newer</a>
+        {% else %}
+        <span class="btn btn-disabled">&larr; Newer</span>
+        {% endif %}
+        {% if next_id %}
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ next_id }}?label={{ current_label }}" class="btn">Older &rarr;</a>
+        {% else %}
+        <span class="btn btn-disabled">Older &rarr;</span>
+        {% endif %}
+    </div>
+
+    <div class="image-viewer">
+        <img src="{{ image.image_url }}" alt="Candlestick chart" class="chart-image">
+    </div>
+
+    <section class="info-section">
+        <h2>Details</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>Window ID</label>
+                <span>{{ image.window_id }}</span>
+            </div>
+            <div class="info-item">
+                <label>Period</label>
+                <span>{{ window.start_ts.strftime('%Y-%m-%d %H:%M') }} - {{ window.end_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+            <div class="info-item">
+                <label>Lookback N</label>
+                <span>{{ window.lookback_n }}</span>
+            </div>
+            <div class="info-item">
+                <label>MA Periods</label>
+                <span>{{ image.ma_periods }}</span>
+            </div>
+            <div class="info-item">
+                <label>Size</label>
+                <span>{{ image.width }}x{{ image.height }}</span>
+            </div>
+            <div class="info-item">
+                <label>Label</label>
+                <span>
+                    {% if label_result %}
+                    <span class="label-badge label-{{ label_result }}">{{ label_result }}</span>
+                    {% else %}
+                    <span class="text-muted">No label</span>
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
+                <label>Generated</label>
+                <span>{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+            </div>
+        </div>
+    </section>
+
+    <div class="image-nav">
+        {% if prev_id %}
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ prev_id }}?label={{ current_label }}" class="btn">&larr; Newer</a>
+        {% else %}
+        <span class="btn btn-disabled">&larr; Newer</span>
+        {% endif %}
+        {% if next_id %}
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ next_id }}?label={{ current_label }}" class="btn">Older &rarr;</a>
+        {% else %}
+        <span class="btn btn-disabled">Older &rarr;</span>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

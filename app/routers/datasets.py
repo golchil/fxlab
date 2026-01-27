@@ -1,18 +1,20 @@
 import os
 import json
 import tempfile
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage
 from app.schemas import (
     DatasetResponse, ImportRequest, WindowsRequest, LabelsTpSlRequest,
-    WindowsStatsResponse, LabelsStatsResponse, JobCreatedResponse
+    WindowsStatsResponse, LabelsStatsResponse, JobCreatedResponse,
+    ImagesRequest, ImagesStatsResponse, ImageListResponse, ImageListItem, ImageDetailResponse
 )
-from app.tasks import import_csv_task, generate_windows_task, generate_labels_task
+from app.tasks import import_csv_task, generate_windows_task, generate_labels_task, generate_window_images_task
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -280,4 +282,187 @@ def get_labels_stats(dataset_id: int, db: Session = Depends(get_db)):
         generated_count=generated_count,
         generation_start_ts=generation_start_ts,
         generation_end_ts=generation_end_ts,
+    )
+
+
+# ============ Images API ============
+
+@router.post("/{dataset_id}/images", response_model=JobCreatedResponse)
+def create_images(
+    dataset_id: int,
+    request: ImagesRequest,
+    db: Session = Depends(get_db),
+):
+    """Generate candlestick chart images for windows."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    params = {
+        "lookback_n": request.lookback_n,
+        "ma_periods": request.ma_periods,
+        "limit": request.limit,
+        "start_ts": request.start_ts.isoformat() if request.start_ts else None,
+        "end_ts": request.end_ts.isoformat() if request.end_ts else None,
+        "overwrite": request.overwrite,
+    }
+
+    job = Job(
+        dataset_id=dataset_id,
+        job_type="images",
+        status="pending",
+        params=json.dumps(params),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    generate_window_images_task.delay(
+        job_id=job.id,
+        dataset_id=dataset_id,
+        lookback_n=request.lookback_n,
+        ma_periods=request.ma_periods,
+        limit=request.limit,
+        start_ts=request.start_ts.isoformat() if request.start_ts else None,
+        end_ts=request.end_ts.isoformat() if request.end_ts else None,
+        overwrite=request.overwrite,
+    )
+
+    return JobCreatedResponse(job_id=job.id, message="Image generation job started")
+
+
+@router.get("/{dataset_id}/images/stats", response_model=ImagesStatsResponse)
+def get_images_stats(dataset_id: int, db: Session = Depends(get_db)):
+    """Get image generation statistics."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    total = db.query(func.count(WindowImage.id)).filter(WindowImage.dataset_id == dataset_id).scalar() or 0
+    latest_created = db.query(func.max(WindowImage.created_at)).filter(WindowImage.dataset_id == dataset_id).scalar()
+
+    # Get latest generation job info
+    latest_job = (
+        db.query(Job)
+        .filter(Job.dataset_id == dataset_id, Job.job_type == "images", Job.status == "completed")
+        .order_by(Job.updated_at.desc())
+        .first()
+    )
+
+    last_params = None
+    generated_count = None
+    generation_start_ts = None
+    generation_end_ts = None
+    if latest_job:
+        last_params = latest_job.params
+        if latest_job.result:
+            result = json.loads(latest_job.result)
+            generated_count = result.get("generated_count")
+            generation_start_ts = result.get("generation_start_ts")
+            generation_end_ts = result.get("generation_end_ts")
+
+    return ImagesStatsResponse(
+        total_images=total,
+        latest_created_at=latest_created,
+        last_generation_params=last_params,
+        generated_count=generated_count,
+        generation_start_ts=generation_start_ts,
+        generation_end_ts=generation_end_ts,
+    )
+
+
+@router.get("/{dataset_id}/images/list", response_model=ImageListResponse)
+def list_images(
+    dataset_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    label: Optional[str] = Query(None, regex="^(tp_hit|sl_hit|neither|all)$"),
+    db: Session = Depends(get_db),
+):
+    """List images with pagination and optional label filter."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Base query: join window_images with windows
+    query = (
+        db.query(WindowImage, Window)
+        .join(Window, WindowImage.window_id == Window.id)
+        .filter(WindowImage.dataset_id == dataset_id)
+    )
+
+    # Left join with labels to get label result
+    # We need to find labels that match the window's end_ts (bar_ts)
+    if label and label != "all":
+        # Join with labels and filter by result
+        query = (
+            query.join(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
+            .filter(Label.result == label)
+        )
+    else:
+        # Left join to get label if exists
+        query = query.outerjoin(
+            Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts)
+        ).add_columns(Label.result.label("label_result"))
+
+    # Count total
+    if label and label != "all":
+        count_query = (
+            db.query(func.count(WindowImage.id))
+            .join(Window, WindowImage.window_id == Window.id)
+            .join(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
+            .filter(WindowImage.dataset_id == dataset_id, Label.result == label)
+        )
+    else:
+        count_query = (
+            db.query(func.count(WindowImage.id))
+            .filter(WindowImage.dataset_id == dataset_id)
+        )
+
+    total = count_query.scalar() or 0
+
+    # Order and paginate
+    offset = (page - 1) * page_size
+
+    if label and label != "all":
+        rows = (
+            query
+            .add_columns(Label.result.label("label_result"))
+            .order_by(Window.end_ts.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+    else:
+        rows = (
+            query
+            .order_by(Window.end_ts.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+
+    items = []
+    for row in rows:
+        if label and label != "all":
+            wi, window, label_result = row
+        else:
+            wi, window, label_result = row
+
+        items.append(ImageListItem(
+            id=wi.id,
+            window_id=wi.window_id,
+            end_ts=window.end_ts,
+            image_url=f"/images/{wi.id}/raw",
+            label_result=label_result,
+        ))
+
+    total_pages = (total + page_size - 1) // page_size
+
+    return ImageListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
     )

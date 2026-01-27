@@ -68,6 +68,24 @@
                     {% endif %}
                 </div>
             </div>
+            <div class="stat-box">
+                <h3>Images Stats</h3>
+                <div class="stat-content">
+                    <p><strong>Total:</strong> {{ images_stats.total_images }}</p>
+                    {% if images_stats.latest_created_at %}
+                    <p><strong>Latest:</strong> {{ images_stats.latest_created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    {% endif %}
+                    {% if images_stats.generated_count %}
+                    <p><strong>Last Generated:</strong> {{ images_stats.generated_count }} images</p>
+                    {% endif %}
+                    {% if images_stats.skipped_count %}
+                    <p><strong>Last Skipped:</strong> {{ images_stats.skipped_count }}</p>
+                    {% endif %}
+                    {% if images_stats.total_images > 0 %}
+                    <p><a href="/ui/datasets/{{ dataset.id }}/images" class="btn btn-small btn-primary">View Gallery</a></p>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </section>
 
@@ -128,6 +146,37 @@
                         <input type="text" id="labels_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
                     </div>
                     <button type="submit" class="btn btn-primary">Generate Labels</button>
+                </form>
+            </div>
+            <div class="form-box">
+                <h3>Generate Images</h3>
+                <form action="/ui/datasets/{{ dataset.id }}/images" method="post">
+                    <div class="form-group">
+                        <label for="img_lookback_n">Lookback N</label>
+                        <input type="number" id="img_lookback_n" name="lookback_n" value="128" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ma_periods">MA Periods (comma-separated)</label>
+                        <input type="text" id="ma_periods" name="ma_periods" value="5,20,60">
+                    </div>
+                    <div class="form-group">
+                        <label for="img_limit">Limit (optional)</label>
+                        <input type="number" id="img_limit" name="limit" placeholder="No limit">
+                    </div>
+                    <div class="form-group">
+                        <label for="img_start_ts">Start (ISO8601, optional)</label>
+                        <input type="text" id="img_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="img_end_ts">End (ISO8601, optional)</label>
+                        <input type="text" id="img_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="overwrite"> Overwrite existing images
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Generate Images</button>
                 </form>
             </div>
         </div>
