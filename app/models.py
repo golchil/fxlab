@@ -23,6 +23,7 @@ class Dataset(Base):
     windows: Mapped[list["Window"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     labels: Mapped[list["Label"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     window_images: Mapped[list["WindowImage"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    window_features: Mapped[list["WindowFeature"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -99,6 +100,7 @@ class Window(Base):
 
     dataset: Mapped["Dataset"] = relationship(back_populates="windows")
     image: Mapped[Optional["WindowImage"]] = relationship(back_populates="window", uselist=False, cascade="all, delete-orphan")
+    feature: Mapped[Optional["WindowFeature"]] = relationship(back_populates="window", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_windows_dataset", "dataset_id"),
@@ -123,6 +125,32 @@ class Label(Base):
 
     __table_args__ = (
         Index("ix_labels_dataset", "dataset_id"),
+    )
+
+
+class WindowFeature(Base):
+    __tablename__ = "window_features"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    window_id: Mapped[int] = mapped_column(ForeignKey("windows.id", ondelete="CASCADE"), unique=True)
+    sma5_slope_5: Mapped[float] = mapped_column(Float)
+    sma20_slope_5: Mapped[float] = mapped_column(Float)
+    sma20_slope_20: Mapped[float] = mapped_column(Float)
+    sma60_slope_20: Mapped[float] = mapped_column(Float)
+    close_to_sma20: Mapped[float] = mapped_column(Float)
+    spread_5_20: Mapped[float] = mapped_column(Float)
+    spread_20_60: Mapped[float] = mapped_column(Float)
+    atr14: Mapped[float] = mapped_column(Float)
+    vol_mean: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship(back_populates="window_features")
+    window: Mapped["Window"] = relationship(back_populates="feature")
+
+    __table_args__ = (
+        Index("ix_window_features_dataset", "dataset_id"),
+        Index("ix_window_features_dataset_window", "dataset_id", "window_id"),
     )
 
 

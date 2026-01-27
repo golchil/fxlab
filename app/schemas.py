@@ -160,3 +160,49 @@ class ImageDetailResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Feature generation request
+class FeaturesRequest(BaseModel):
+    lookback_n: int = 128
+    limit: Optional[int] = None
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+    overwrite: bool = False
+
+
+# Features stats response
+class FeaturesStatsResponse(BaseModel):
+    total_features: int
+    latest_created_at: Optional[datetime] = None
+    generated_count: Optional[int] = None
+    skipped_count: Optional[int] = None
+
+
+# Insights response
+class FeatureRankingItem(BaseModel):
+    feature_name: str
+    tp_mean: float
+    sl_mean: float
+    diff: float
+    effect_size: float
+    direction: str  # "higher_is_tp" or "lower_is_tp"
+
+
+class ThresholdSuggestion(BaseModel):
+    feature_name: str
+    operator: str  # ">", "<"
+    threshold: float
+    tp_count: int
+    sl_count: int
+    precision: float  # tp / (tp + sl) for this filter
+
+
+class InsightsResponse(BaseModel):
+    dataset_id: int
+    total_features: int
+    tp_count: int
+    sl_count: int
+    neither_count: int
+    feature_ranking: List[FeatureRankingItem]
+    threshold_suggestions: List[ThresholdSuggestion]

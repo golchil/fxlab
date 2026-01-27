@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - {{ dataset.name }} Insights{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>{{ dataset.name }} - Feature Insights</h1>
+        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; Back to Dataset</a>
+    </div>
+
+    <section class="info-section">
+        <h2>Summary</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>Total Features</label>
+                <span>{{ total_features }}</span>
+            </div>
+            <div class="info-item">
+                <label>TP Hit</label>
+                <span class="label-badge label-tp_hit">{{ tp_count }}</span>
+            </div>
+            <div class="info-item">
+                <label>SL Hit</label>
+                <span class="label-badge label-sl_hit">{{ sl_count }}</span>
+            </div>
+            <div class="info-item">
+                <label>Neither</label>
+                <span class="label-badge label-neither">{{ neither_count }}</span>
+            </div>
+            <div class="info-item">
+                <label>Base TP Precision</label>
+                <span>{{ "%.2f"|format(base_precision * 100) }}%</span>
+            </div>
+        </div>
+    </section>
+
+    {% if feature_ranking %}
+    <section class="info-section">
+        <h2>Feature Ranking (by Effect Size)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Feature</th>
+                    <th>TP Mean</th>
+                    <th>SL Mean</th>
+                    <th>Diff</th>
+                    <th>Effect Size</th>
+                    <th>Direction</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in feature_ranking %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><strong>{{ item.feature_name }}</strong></td>
+                    <td>{{ item.tp_mean }}</td>
+                    <td>{{ item.sl_mean }}</td>
+                    <td>{{ item.diff }}</td>
+                    <td><strong>{{ item.effect_size }}</strong></td>
+                    <td>
+                        {% if item.direction == "higher_is_tp" %}
+                        <span class="label-badge label-tp_hit">Higher = TP</span>
+                        {% else %}
+                        <span class="label-badge label-sl_hit">Lower = TP</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% else %}
+    <p class="empty-state">No feature ranking available. Generate features and labels first.</p>
+    {% endif %}
+
+    {% if threshold_suggestions %}
+    <section class="info-section">
+        <h2>Threshold Suggestions</h2>
+        <p style="color: var(--gray-500); margin-bottom: 1rem;">
+            Conditions that improve TP precision above the base rate ({{ "%.2f"|format(base_precision * 100) }}%).
+        </p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Condition</th>
+                    <th>TP Count</th>
+                    <th>SL Count</th>
+                    <th>Precision</th>
+                    <th>Improvement</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in threshold_suggestions %}
+                <tr>
+                    <td><strong>{{ s.feature_name }}</strong></td>
+                    <td><code>{{ s.feature_name }} {{ s.operator }} {{ s.threshold }}</code></td>
+                    <td>{{ s.tp_count }}</td>
+                    <td>{{ s.sl_count }}</td>
+                    <td><strong>{{ "%.2f"|format(s.precision * 100) }}%</strong></td>
+                    <td>
+                        {% set improvement = s.precision - base_precision %}
+                        <span class="label-badge {% if improvement > 0 %}label-tp_hit{% else %}label-neither{% endif %}">
+                            +{{ "%.2f"|format(improvement * 100) }}pp
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    {% if feature_ranking %}
+    <section class="info-section">
+        <h2>Gallery Links</h2>
+        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=all" class="btn btn-primary">All Images</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit" class="btn" style="border-color: var(--success); color: var(--success);">TP Hit Images</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit" class="btn" style="border-color: var(--danger); color: var(--danger);">SL Hit Images</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither" class="btn">Neither Images</a>
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

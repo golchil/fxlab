@@ -6,7 +6,7 @@ import pytz
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature
 from app.config import settings as app_settings
 
 celery_app = Celery(
@@ -588,6 +588,129 @@ def generate_window_images_task(
             "skipped_count": skipped_count,
             "generation_start_ts": actual_start_ts.isoformat() if actual_start_ts else None,
             "generation_end_ts": actual_end_ts.isoformat() if actual_end_ts else None,
+        })
+        db.commit()
+
+        return {"generated_count": generated_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def generate_window_features_task(
+    self, job_id: int, dataset_id: int, lookback_n: int,
+    limit: int = None, start_ts: str = None, end_ts: str = None,
+    overwrite: bool = False
+):
+    """
+    Generate numerical features for each window.
+    """
+    from app.services.feature_extractor import extract_features
+    import bisect
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        # Build window query
+        query = db.query(Window).filter(
+            Window.dataset_id == dataset_id,
+            Window.lookback_n == lookback_n
+        )
+
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Window.end_ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Window.end_ts <= filter_end)
+
+        query = query.order_by(Window.end_ts)
+
+        if limit:
+            query = query.limit(limit)
+
+        windows = query.all()
+
+        if not windows:
+            job.status = "completed"
+            job.result = json.dumps({
+                "generated_count": 0,
+                "skipped_count": 0,
+                "message": "No windows found",
+            })
+            db.commit()
+            return {"generated_count": 0}
+
+        # Get all bars for this dataset
+        all_bars = db.query(Bar).filter(Bar.dataset_id == dataset_id).order_by(Bar.ts).all()
+        sorted_bar_times = [b.ts for b in all_bars]
+        bars_data = [(b.open, b.high, b.low, b.close, b.volume) for b in all_bars]
+
+        generated_count = 0
+        skipped_count = 0
+        batch_size = 500
+
+        for window in windows:
+            # Check if feature already exists
+            existing = db.query(WindowFeature).filter(WindowFeature.window_id == window.id).first()
+            if existing and not overwrite:
+                skipped_count += 1
+                continue
+
+            # Find bars in window range using binary search
+            start_idx = bisect.bisect_left(sorted_bar_times, window.start_ts)
+            end_idx = bisect.bisect_right(sorted_bar_times, window.end_ts)
+
+            window_bars_data = bars_data[start_idx:end_idx]
+
+            if len(window_bars_data) < lookback_n:
+                skipped_count += 1
+                continue
+
+            # Take exactly lookback_n bars from the end
+            window_bars_data = window_bars_data[-lookback_n:]
+
+            features = extract_features(window_bars_data)
+            if features is None:
+                skipped_count += 1
+                continue
+
+            if existing:
+                for key, val in features.items():
+                    setattr(existing, key, val)
+                existing.created_at = datetime.utcnow()
+            else:
+                wf = WindowFeature(
+                    dataset_id=dataset_id,
+                    window_id=window.id,
+                    created_at=datetime.utcnow(),
+                    **features,
+                )
+                db.add(wf)
+
+            generated_count += 1
+
+            if generated_count % batch_size == 0:
+                db.commit()
+
+        db.commit()
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "generated_count": generated_count,
+            "skipped_count": skipped_count,
         })
         db.commit()
 

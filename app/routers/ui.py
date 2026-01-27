@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage
-from app.tasks import import_csv_task, generate_windows_task, generate_labels_task, generate_window_images_task
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature
+from app.tasks import (
+    import_csv_task, generate_windows_task, generate_labels_task,
+    generate_window_images_task, generate_window_features_task
+)
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -145,6 +148,33 @@ def get_images_stats(dataset_id: int, db: Session):
     }
 
 
+def get_features_stats(dataset_id: int, db: Session):
+    """Get features statistics for a dataset."""
+    total = db.query(func.count(WindowFeature.id)).filter(WindowFeature.dataset_id == dataset_id).scalar() or 0
+    latest_created = db.query(func.max(WindowFeature.created_at)).filter(WindowFeature.dataset_id == dataset_id).scalar()
+
+    latest_job = (
+        db.query(Job)
+        .filter(Job.dataset_id == dataset_id, Job.job_type == "features", Job.status == "completed")
+        .order_by(Job.updated_at.desc())
+        .first()
+    )
+
+    generated_count = None
+    skipped_count = None
+    if latest_job and latest_job.result:
+        result = json.loads(latest_job.result)
+        generated_count = result.get("generated_count")
+        skipped_count = result.get("skipped_count")
+
+    return {
+        "total_features": total,
+        "latest_created_at": latest_created,
+        "generated_count": generated_count,
+        "skipped_count": skipped_count,
+    }
+
+
 def parse_optional_datetime(value: str) -> Optional[datetime]:
     """Parse optional ISO8601 datetime string."""
     if not value or value.strip() == "":
@@ -186,6 +216,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
     windows_stats = get_windows_stats(dataset_id, db)
     labels_stats = get_labels_stats(dataset_id, db)
     images_stats = get_images_stats(dataset_id, db)
+    features_stats = get_features_stats(dataset_id, db)
 
     return templates.TemplateResponse("ui_dataset_detail.html", {
         "request": request,
@@ -193,6 +224,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "windows_stats": windows_stats,
         "labels_stats": labels_stats,
         "images_stats": images_stats,
+        "features_stats": features_stats,
     })
 
 
@@ -456,6 +488,217 @@ def ui_create_images(
             "images_stats": images_stats_data,
             "error": str(e),
         })
+
+
+@router.post("/datasets/{dataset_id}/features")
+def ui_create_features(
+    request: Request,
+    dataset_id: int,
+    lookback_n: int = Form(128),
+    limit: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    overwrite: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create feature generation job."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    try:
+        limit_val = int(limit) if limit and limit.strip() else None
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+        overwrite_flag = overwrite == "on"
+
+        params = {
+            "lookback_n": lookback_n,
+            "limit": limit_val,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+            "overwrite": overwrite_flag,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="features",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        generate_window_features_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            lookback_n=lookback_n,
+            limit=limit_val,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+            overwrite=overwrite_flag,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        dataset_data = get_dataset_response(dataset, db)
+        windows_stats_data = get_windows_stats(dataset_id, db)
+        labels_stats_data = get_labels_stats(dataset_id, db)
+        images_stats_data = get_images_stats(dataset_id, db)
+        features_stats_data = get_features_stats(dataset_id, db)
+        return templates.TemplateResponse("ui_dataset_detail.html", {
+            "request": request,
+            "dataset": dataset_data,
+            "windows_stats": windows_stats_data,
+            "labels_stats": labels_stats_data,
+            "images_stats": images_stats_data,
+            "features_stats": features_stats_data,
+            "error": str(e),
+        })
+
+
+@router.get("/datasets/{dataset_id}/insights", response_class=HTMLResponse)
+def ui_insights(
+    request: Request,
+    dataset_id: int,
+    db: Session = Depends(get_db),
+):
+    """Insights page showing feature ranking and threshold suggestions."""
+    import math
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    # Join features with labels via window end_ts
+    rows = (
+        db.query(WindowFeature, Label.result)
+        .join(Window, WindowFeature.window_id == Window.id)
+        .join(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
+        .filter(WindowFeature.dataset_id == dataset_id)
+        .all()
+    )
+
+    feature_names = [
+        "sma5_slope_5", "sma20_slope_5", "sma20_slope_20", "sma60_slope_20",
+        "close_to_sma20", "spread_5_20", "spread_20_60", "atr14", "vol_mean",
+    ]
+
+    tp_features = {name: [] for name in feature_names}
+    sl_features = {name: [] for name in feature_names}
+    neither_count = 0
+    tp_count = 0
+    sl_count = 0
+
+    for wf, label_result in rows:
+        if label_result == "tp_hit":
+            tp_count += 1
+            for name in feature_names:
+                tp_features[name].append(getattr(wf, name))
+        elif label_result == "sl_hit":
+            sl_count += 1
+            for name in feature_names:
+                sl_features[name].append(getattr(wf, name))
+        else:
+            neither_count += 1
+
+    total_features = db.query(func.count(WindowFeature.id)).filter(
+        WindowFeature.dataset_id == dataset_id
+    ).scalar() or 0
+
+    feature_ranking = []
+    for name in feature_names:
+        tp_vals = tp_features[name]
+        sl_vals = sl_features[name]
+
+        if not tp_vals or not sl_vals:
+            continue
+
+        tp_mean = sum(tp_vals) / len(tp_vals)
+        sl_mean = sum(sl_vals) / len(sl_vals)
+        diff = tp_mean - sl_mean
+
+        tp_var = sum((v - tp_mean) ** 2 for v in tp_vals) / len(tp_vals) if len(tp_vals) > 1 else 0
+        sl_var = sum((v - sl_mean) ** 2 for v in sl_vals) / len(sl_vals) if len(sl_vals) > 1 else 0
+        pooled_std = math.sqrt((tp_var + sl_var) / 2) if (tp_var + sl_var) > 0 else 1e-10
+        effect_size = abs(diff) / pooled_std
+
+        direction = "higher_is_tp" if diff > 0 else "lower_is_tp"
+
+        feature_ranking.append({
+            "feature_name": name,
+            "tp_mean": round(tp_mean, 6),
+            "sl_mean": round(sl_mean, 6),
+            "diff": round(diff, 6),
+            "effect_size": round(effect_size, 4),
+            "direction": direction,
+        })
+
+    feature_ranking.sort(key=lambda x: x["effect_size"], reverse=True)
+
+    # Threshold suggestions
+    threshold_suggestions = []
+    base_precision = tp_count / (tp_count + sl_count) if (tp_count + sl_count) > 0 else 0
+
+    for item in feature_ranking[:5]:
+        name = item["feature_name"]
+        all_tp = tp_features[name]
+        all_sl = sl_features[name]
+
+        if item["direction"] == "higher_is_tp":
+            all_vals = sorted(all_tp + all_sl)
+            for pct in [0.5, 0.6, 0.7]:
+                idx = int(len(all_vals) * pct)
+                threshold = all_vals[min(idx, len(all_vals) - 1)]
+                tp_above = sum(1 for v in all_tp if v > threshold)
+                sl_above = sum(1 for v in all_sl if v > threshold)
+                total_above = tp_above + sl_above
+                if total_above > 0:
+                    precision = tp_above / total_above
+                    if precision > base_precision:
+                        threshold_suggestions.append({
+                            "feature_name": name,
+                            "operator": ">",
+                            "threshold": round(threshold, 6),
+                            "tp_count": tp_above,
+                            "sl_count": sl_above,
+                            "precision": round(precision, 4),
+                        })
+                        break
+        else:
+            all_vals = sorted(all_tp + all_sl)
+            for pct in [0.5, 0.4, 0.3]:
+                idx = int(len(all_vals) * pct)
+                threshold = all_vals[min(idx, len(all_vals) - 1)]
+                tp_below = sum(1 for v in all_tp if v < threshold)
+                sl_below = sum(1 for v in all_sl if v < threshold)
+                total_below = tp_below + sl_below
+                if total_below > 0:
+                    precision = tp_below / total_below
+                    if precision > base_precision:
+                        threshold_suggestions.append({
+                            "feature_name": name,
+                            "operator": "<",
+                            "threshold": round(threshold, 6),
+                            "tp_count": tp_below,
+                            "sl_count": sl_below,
+                            "precision": round(precision, 4),
+                        })
+                        break
+
+    return templates.TemplateResponse("ui_insights.html", {
+        "request": request,
+        "dataset": {"id": dataset_id, "name": dataset.name},
+        "total_features": total_features,
+        "tp_count": tp_count,
+        "sl_count": sl_count,
+        "neither_count": neither_count,
+        "base_precision": round(base_precision, 4),
+        "feature_ranking": feature_ranking,
+        "threshold_suggestions": threshold_suggestions,
+    })
 
 
 @router.get("/datasets/{dataset_id}/images", response_class=HTMLResponse)
