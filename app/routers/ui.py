@@ -17,6 +17,19 @@ from app.tasks import (
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
+# Feature display names (Japanese)
+FEATURE_DISPLAY_NAMES = {
+    "sma5_slope_5": "SMA5 の傾き(5本)",
+    "sma20_slope_5": "SMA20 の傾き(5本)",
+    "sma20_slope_20": "SMA20 の傾き(20本)",
+    "sma60_slope_20": "SMA60 の傾き(20本)",
+    "close_to_sma20": "終値 - SMA20 乖離",
+    "spread_5_20": "SMA5 と SMA20 の差",
+    "spread_20_60": "SMA20 と SMA60 の差",
+    "atr14": "ATR(14)",
+    "vol_mean": "平均出来高",
+}
+
 # Get the templates directory path
 templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=templates_dir)
@@ -698,6 +711,7 @@ def ui_insights(
         "base_precision": round(base_precision, 4),
         "feature_ranking": feature_ranking,
         "threshold_suggestions": threshold_suggestions,
+        "feat_names": FEATURE_DISPLAY_NAMES,
     })
 
 
@@ -798,6 +812,9 @@ def ui_image_gallery(
     if feat and op and thr:
         feat_qs = f"&feat={feat}&op={op}&thr={thr}"
 
+    # Resolve display name for active feature filter
+    feat_display = FEATURE_DISPLAY_NAMES.get(feat, feat) if feat else ""
+
     return templates.TemplateResponse("ui_image_gallery.html", {
         "request": request,
         "dataset": {"id": dataset_id, "name": dataset.name},
@@ -808,6 +825,7 @@ def ui_image_gallery(
         "total_pages": total_pages,
         "label": label,
         "feat": feat or "",
+        "feat_display": feat_display,
         "op": op or "",
         "thr": thr or "",
         "feat_qs": feat_qs,

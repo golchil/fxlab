@@ -1,35 +1,35 @@
 {% extends "base.html" %}
 
-{% block title %}FXLab - {{ dataset.name }} Insights{% endblock %}
+{% block title %}FXLab - {{ dataset.name }} 特徴分析{% endblock %}
 
 {% block content %}
 <div class="container">
     <div class="header-row">
-        <h1>{{ dataset.name }} - Feature Insights</h1>
-        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; Back to Dataset</a>
+        <h1>{{ dataset.name }} - 特徴分析</h1>
+        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; データセットに戻る</a>
     </div>
 
     <section class="info-section">
-        <h2>Summary</h2>
+        <h2>概要</h2>
         <div class="info-grid">
             <div class="info-item">
-                <label>Total Features</label>
+                <label>特徴量件数</label>
                 <span>{{ total_features }}</span>
             </div>
             <div class="info-item">
-                <label>TP Hit</label>
+                <label>TP到達（勝ち）</label>
                 <span class="label-badge label-tp_hit">{{ tp_count }}</span>
             </div>
             <div class="info-item">
-                <label>SL Hit</label>
+                <label>SL到達（負け）</label>
                 <span class="label-badge label-sl_hit">{{ sl_count }}</span>
             </div>
             <div class="info-item">
-                <label>Neither</label>
+                <label>どちらでもない</label>
                 <span class="label-badge label-neither">{{ neither_count }}</span>
             </div>
             <div class="info-item">
-                <label>Base TP Precision</label>
+                <label>基本勝率</label>
                 <span>{{ "%.2f"|format(base_precision * 100) }}%</span>
             </div>
         </div>
@@ -37,33 +37,36 @@
 
     {% if feature_ranking %}
     <section class="info-section">
-        <h2>Feature Ranking (by Effect Size)</h2>
+        <h2>特徴ランキング（効きの強さ順）</h2>
         <table>
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Feature</th>
-                    <th>TP Mean</th>
-                    <th>SL Mean</th>
-                    <th>Diff</th>
-                    <th>Effect Size</th>
-                    <th>Direction</th>
+                    <th>特徴名</th>
+                    <th>勝ち平均</th>
+                    <th>負け平均</th>
+                    <th>差（勝ち−負け）</th>
+                    <th>効きの強さ</th>
+                    <th>方向</th>
                 </tr>
             </thead>
             <tbody>
                 {% for item in feature_ranking %}
                 <tr>
                     <td>{{ loop.index }}</td>
-                    <td><strong>{{ item.feature_name }}</strong></td>
+                    <td>
+                        <strong>{{ feat_names.get(item.feature_name, item.feature_name) }}</strong>
+                        <br><small style="color: var(--gray-500);">{{ item.feature_name }}</small>
+                    </td>
                     <td>{{ item.tp_mean }}</td>
                     <td>{{ item.sl_mean }}</td>
                     <td>{{ item.diff }}</td>
                     <td><strong>{{ item.effect_size }}</strong></td>
                     <td>
                         {% if item.direction == "higher_is_tp" %}
-                        <span class="label-badge label-tp_hit">Higher = TP</span>
+                        <span class="label-badge label-tp_hit">大きいほど勝ち</span>
                         {% else %}
-                        <span class="label-badge label-sl_hit">Lower = TP</span>
+                        <span class="label-badge label-sl_hit">小さいほど勝ち</span>
                         {% endif %}
                     </td>
                 </tr>
@@ -72,32 +75,35 @@
         </table>
     </section>
     {% else %}
-    <p class="empty-state">No feature ranking available. Generate features and labels first.</p>
+    <p class="empty-state">ランキングデータがありません。先に特徴量とラベルを生成してください。</p>
     {% endif %}
 
     {% if threshold_suggestions %}
     <section class="info-section">
-        <h2>Threshold Suggestions</h2>
+        <h2>おすすめ条件（しきい値）</h2>
         <p style="color: var(--gray-500); margin-bottom: 1rem;">
-            Conditions that improve TP precision above the base rate ({{ "%.2f"|format(base_precision * 100) }}%).
+            基本勝率（{{ "%.2f"|format(base_precision * 100) }}%）を上回る条件の一覧です。
         </p>
         <table>
             <thead>
                 <tr>
-                    <th>Feature</th>
-                    <th>Condition</th>
-                    <th>TP Count</th>
-                    <th>SL Count</th>
-                    <th>Precision</th>
-                    <th>Improvement</th>
+                    <th>特徴名</th>
+                    <th>条件</th>
+                    <th>勝ち件数</th>
+                    <th>負け件数</th>
+                    <th>勝率</th>
+                    <th>改善幅</th>
                     <th></th>
                 </tr>
             </thead>
             <tbody>
                 {% for s in threshold_suggestions %}
                 <tr>
-                    <td><strong>{{ s.feature_name }}</strong></td>
-                    <td><code>{{ s.feature_name }} {{ s.operator }} {{ s.threshold }}</code></td>
+                    <td>
+                        <strong>{{ feat_names.get(s.feature_name, s.feature_name) }}</strong>
+                        <br><small style="color: var(--gray-500);">{{ s.feature_name }}</small>
+                    </td>
+                    <td><code>{{ s.operator }} {{ s.threshold }}</code></td>
                     <td>{{ s.tp_count }}</td>
                     <td>{{ s.sl_count }}</td>
                     <td><strong>{{ "%.2f"|format(s.precision * 100) }}%</strong></td>
@@ -108,7 +114,7 @@
                         </span>
                     </td>
                     <td>
-                        <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit&feat={{ s.feature_name }}&op={{ 'gt' if s.operator == '>' else 'lt' }}&thr={{ s.threshold }}" class="btn btn-small btn-primary">View images</a>
+                        <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit&feat={{ s.feature_name }}&op={{ 'gt' if s.operator == '>' else 'lt' }}&thr={{ s.threshold }}" class="btn btn-small btn-primary">該当画像を見る</a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -119,12 +125,12 @@
 
     {% if feature_ranking %}
     <section class="info-section">
-        <h2>Gallery Links</h2>
+        <h2>ギャラリーリンク</h2>
         <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=all" class="btn btn-primary">All Images</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit" class="btn" style="border-color: var(--success); color: var(--success);">TP Hit Images</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit" class="btn" style="border-color: var(--danger); color: var(--danger);">SL Hit Images</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither" class="btn">Neither Images</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=all" class="btn btn-primary">すべての画像</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit" class="btn" style="border-color: var(--success); color: var(--success);">勝ち画像</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit" class="btn" style="border-color: var(--danger); color: var(--danger);">負け画像</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither" class="btn">どちらでもない</a>
         </div>
     </section>
     {% endif %}

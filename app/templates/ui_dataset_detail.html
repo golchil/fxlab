@@ -6,26 +6,26 @@
 <div class="container">
     <div class="header-row">
         <h1>{{ dataset.name }}</h1>
-        <a href="/ui/datasets" class="btn">&larr; Back to List</a>
+        <a href="/ui/datasets" class="btn">&larr; 一覧に戻る</a>
     </div>
 
     <section class="info-section">
-        <h2>Dataset Info</h2>
+        <h2>データセット情報</h2>
         <div class="info-grid">
             <div class="info-item">
                 <label>ID</label>
                 <span>{{ dataset.id }}</span>
             </div>
             <div class="info-item">
-                <label>Timezone</label>
+                <label>タイムゾーン</label>
                 <span>{{ dataset.timezone }}</span>
             </div>
             <div class="info-item">
-                <label>Bar Count</label>
+                <label>バー数</label>
                 <span>{{ dataset.bar_count or 0 }}</span>
             </div>
             <div class="info-item">
-                <label>Period</label>
+                <label>期間</label>
                 <span>
                     {% if dataset.start_ts and dataset.end_ts %}
                     {{ dataset.start_ts.strftime('%Y-%m-%d %H:%M') }} - {{ dataset.end_ts.strftime('%Y-%m-%d %H:%M') }}
@@ -40,67 +40,67 @@
     <section class="stats-section">
         <div class="stats-row">
             <div class="stat-box">
-                <h3>Windows Stats</h3>
+                <h3>ウィンドウ統計</h3>
                 <div class="stat-content">
-                    <p><strong>Total:</strong> {{ windows_stats.total_windows }}</p>
+                    <p><strong>件数:</strong> {{ windows_stats.total_windows }}</p>
                     {% if windows_stats.lookback_n %}
                     <p><strong>Lookback N:</strong> {{ windows_stats.lookback_n }}</p>
                     {% endif %}
                     {% if windows_stats.earliest_start %}
-                    <p><strong>Range:</strong> {{ windows_stats.earliest_start.strftime('%Y-%m-%d %H:%M') }} - {{ windows_stats.latest_end.strftime('%Y-%m-%d %H:%M') if windows_stats.latest_end else '-' }}</p>
+                    <p><strong>期間:</strong> {{ windows_stats.earliest_start.strftime('%Y-%m-%d %H:%M') }} - {{ windows_stats.latest_end.strftime('%Y-%m-%d %H:%M') if windows_stats.latest_end else '-' }}</p>
                     {% endif %}
                     {% if windows_stats.generated_count %}
-                    <p><strong>Last Generated:</strong> {{ windows_stats.generated_count }} windows</p>
+                    <p><strong>前回生成:</strong> {{ windows_stats.generated_count }} 件</p>
                     {% endif %}
                 </div>
             </div>
             <div class="stat-box">
-                <h3>Labels Stats</h3>
+                <h3>ラベル統計</h3>
                 <div class="stat-content">
-                    <p><strong>Total:</strong> {{ labels_stats.total_labels }}</p>
+                    <p><strong>件数:</strong> {{ labels_stats.total_labels }}</p>
                     {% if labels_stats.total_labels > 0 %}
-                    <p><strong>TP Hit:</strong> {{ labels_stats.tp_hit_count }} ({{ "%.1f"|format(labels_stats.tp_hit_ratio * 100) }}%)</p>
-                    <p><strong>SL Hit:</strong> {{ labels_stats.sl_hit_count }} ({{ "%.1f"|format(labels_stats.sl_hit_ratio * 100) }}%)</p>
-                    <p><strong>Neither:</strong> {{ labels_stats.neither_count }}</p>
+                    <p><strong>勝ち (TP):</strong> {{ labels_stats.tp_hit_count }} ({{ "%.1f"|format(labels_stats.tp_hit_ratio * 100) }}%)</p>
+                    <p><strong>負け (SL):</strong> {{ labels_stats.sl_hit_count }} ({{ "%.1f"|format(labels_stats.sl_hit_ratio * 100) }}%)</p>
+                    <p><strong>どちらでもない:</strong> {{ labels_stats.neither_count }}</p>
                     {% endif %}
                     {% if labels_stats.generated_count %}
-                    <p><strong>Last Generated:</strong> {{ labels_stats.generated_count }} labels</p>
+                    <p><strong>前回生成:</strong> {{ labels_stats.generated_count }} 件</p>
                     {% endif %}
                 </div>
             </div>
             <div class="stat-box">
-                <h3>Images Stats</h3>
+                <h3>画像統計</h3>
                 <div class="stat-content">
-                    <p><strong>Total:</strong> {{ images_stats.total_images }}</p>
+                    <p><strong>件数:</strong> {{ images_stats.total_images }}</p>
                     {% if images_stats.latest_created_at %}
-                    <p><strong>Latest:</strong> {{ images_stats.latest_created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    <p><strong>最終生成:</strong> {{ images_stats.latest_created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                     {% endif %}
                     {% if images_stats.generated_count %}
-                    <p><strong>Last Generated:</strong> {{ images_stats.generated_count }} images</p>
+                    <p><strong>前回生成:</strong> {{ images_stats.generated_count }} 件</p>
                     {% endif %}
                     {% if images_stats.skipped_count %}
-                    <p><strong>Last Skipped:</strong> {{ images_stats.skipped_count }}</p>
+                    <p><strong>前回スキップ:</strong> {{ images_stats.skipped_count }} 件</p>
                     {% endif %}
                     {% if images_stats.total_images > 0 %}
-                    <p><a href="/ui/datasets/{{ dataset.id }}/images" class="btn btn-small btn-primary">View Gallery</a></p>
+                    <p><a href="/ui/datasets/{{ dataset.id }}/images" class="btn btn-small btn-primary">ギャラリーを見る</a></p>
                     {% endif %}
                 </div>
             </div>
             <div class="stat-box">
-                <h3>Features Stats</h3>
+                <h3>特徴量統計</h3>
                 <div class="stat-content">
-                    <p><strong>Total:</strong> {{ features_stats.total_features }}</p>
+                    <p><strong>件数:</strong> {{ features_stats.total_features }}</p>
                     {% if features_stats.latest_created_at %}
-                    <p><strong>Latest:</strong> {{ features_stats.latest_created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    <p><strong>最終生成:</strong> {{ features_stats.latest_created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                     {% endif %}
                     {% if features_stats.generated_count %}
-                    <p><strong>Last Generated:</strong> {{ features_stats.generated_count }} features</p>
+                    <p><strong>前回生成:</strong> {{ features_stats.generated_count }} 件</p>
                     {% endif %}
                     {% if features_stats.skipped_count %}
-                    <p><strong>Last Skipped:</strong> {{ features_stats.skipped_count }}</p>
+                    <p><strong>前回スキップ:</strong> {{ features_stats.skipped_count }} 件</p>
                     {% endif %}
                     {% if features_stats.total_features > 0 %}
-                    <p><a href="/ui/datasets/{{ dataset.id }}/insights" class="btn btn-small btn-primary">View Insights</a></p>
+                    <p><a href="/ui/datasets/{{ dataset.id }}/insights" class="btn btn-small btn-primary">特徴分析を見る</a></p>
                     {% endif %}
                 </div>
             </div>
@@ -108,120 +108,120 @@
     </section>
 
     <section class="actions-section">
-        <h2>Generate</h2>
+        <h2>生成</h2>
         <div class="forms-row">
             <div class="form-box">
-                <h3>Generate Windows</h3>
+                <h3>ウィンドウ生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/windows" method="post">
                     <div class="form-group">
                         <label for="lookback_n">Lookback N</label>
                         <input type="number" id="lookback_n" name="lookback_n" value="128" required>
                     </div>
                     <div class="form-group">
-                        <label for="step">Step</label>
+                        <label for="step">ステップ</label>
                         <input type="number" id="step" name="step" value="1" required>
                     </div>
                     <div class="form-group">
-                        <label for="windows_limit">Limit (optional)</label>
-                        <input type="number" id="windows_limit" name="limit" placeholder="No limit">
+                        <label for="windows_limit">件数上限（任意）</label>
+                        <input type="number" id="windows_limit" name="limit" placeholder="上限なし">
                     </div>
                     <div class="form-group">
-                        <label for="windows_start_ts">Start (ISO8601, optional)</label>
+                        <label for="windows_start_ts">開始日時（ISO8601、任意）</label>
                         <input type="text" id="windows_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
                     </div>
                     <div class="form-group">
-                        <label for="windows_end_ts">End (ISO8601, optional)</label>
+                        <label for="windows_end_ts">終了日時（ISO8601、任意）</label>
                         <input type="text" id="windows_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
                     </div>
-                    <button type="submit" class="btn btn-primary">Generate Windows</button>
+                    <button type="submit" class="btn btn-primary">ウィンドウ生成</button>
                 </form>
             </div>
             <div class="form-box">
-                <h3>Generate Labels (TP/SL)</h3>
+                <h3>ラベル生成（TP/SL）</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/labels" method="post">
                     <div class="form-group">
                         <label for="lookahead_m">Lookahead M</label>
                         <input type="number" id="lookahead_m" name="lookahead_m" value="32" required>
                     </div>
                     <div class="form-group">
-                        <label for="tp_r">TP Ratio</label>
+                        <label for="tp_r">TP 倍率</label>
                         <input type="number" id="tp_r" name="tp_r" value="1.0" step="0.1" required>
                     </div>
                     <div class="form-group">
-                        <label for="sl_r">SL Ratio</label>
+                        <label for="sl_r">SL 倍率</label>
                         <input type="number" id="sl_r" name="sl_r" value="1.0" step="0.1" required>
                     </div>
                     <div class="form-group">
-                        <label for="labels_limit">Limit (optional)</label>
-                        <input type="number" id="labels_limit" name="limit" placeholder="No limit">
+                        <label for="labels_limit">件数上限（任意）</label>
+                        <input type="number" id="labels_limit" name="limit" placeholder="上限なし">
                     </div>
                     <div class="form-group">
-                        <label for="labels_start_ts">Start (ISO8601, optional)</label>
+                        <label for="labels_start_ts">開始日時（ISO8601、任意）</label>
                         <input type="text" id="labels_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
                     </div>
                     <div class="form-group">
-                        <label for="labels_end_ts">End (ISO8601, optional)</label>
+                        <label for="labels_end_ts">終了日時（ISO8601、任意）</label>
                         <input type="text" id="labels_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
                     </div>
-                    <button type="submit" class="btn btn-primary">Generate Labels</button>
+                    <button type="submit" class="btn btn-primary">ラベル生成</button>
                 </form>
             </div>
             <div class="form-box">
-                <h3>Generate Images</h3>
+                <h3>画像生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/images" method="post">
                     <div class="form-group">
                         <label for="img_lookback_n">Lookback N</label>
                         <input type="number" id="img_lookback_n" name="lookback_n" value="128" required>
                     </div>
                     <div class="form-group">
-                        <label for="ma_periods">MA Periods (comma-separated)</label>
+                        <label for="ma_periods">MA 期間（カンマ区切り）</label>
                         <input type="text" id="ma_periods" name="ma_periods" value="5,20,60">
                     </div>
                     <div class="form-group">
-                        <label for="img_limit">Limit (optional)</label>
-                        <input type="number" id="img_limit" name="limit" placeholder="No limit">
+                        <label for="img_limit">件数上限（任意）</label>
+                        <input type="number" id="img_limit" name="limit" placeholder="上限なし">
                     </div>
                     <div class="form-group">
-                        <label for="img_start_ts">Start (ISO8601, optional)</label>
+                        <label for="img_start_ts">開始日時（ISO8601、任意）</label>
                         <input type="text" id="img_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
                     </div>
                     <div class="form-group">
-                        <label for="img_end_ts">End (ISO8601, optional)</label>
+                        <label for="img_end_ts">終了日時（ISO8601、任意）</label>
                         <input type="text" id="img_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
                     </div>
                     <div class="form-group">
                         <label>
-                            <input type="checkbox" name="overwrite"> Overwrite existing images
+                            <input type="checkbox" name="overwrite"> 既存画像を上書き
                         </label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Generate Images</button>
+                    <button type="submit" class="btn btn-primary">画像生成</button>
                 </form>
             </div>
             <div class="form-box">
-                <h3>Generate Features</h3>
+                <h3>特徴量生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/features" method="post">
                     <div class="form-group">
                         <label for="feat_lookback_n">Lookback N</label>
                         <input type="number" id="feat_lookback_n" name="lookback_n" value="128" required>
                     </div>
                     <div class="form-group">
-                        <label for="feat_limit">Limit (optional)</label>
-                        <input type="number" id="feat_limit" name="limit" placeholder="No limit">
+                        <label for="feat_limit">件数上限（任意）</label>
+                        <input type="number" id="feat_limit" name="limit" placeholder="上限なし">
                     </div>
                     <div class="form-group">
-                        <label for="feat_start_ts">Start (ISO8601, optional)</label>
+                        <label for="feat_start_ts">開始日時（ISO8601、任意）</label>
                         <input type="text" id="feat_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
                     </div>
                     <div class="form-group">
-                        <label for="feat_end_ts">End (ISO8601, optional)</label>
+                        <label for="feat_end_ts">終了日時（ISO8601、任意）</label>
                         <input type="text" id="feat_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
                     </div>
                     <div class="form-group">
                         <label>
-                            <input type="checkbox" name="overwrite"> Overwrite existing features
+                            <input type="checkbox" name="overwrite"> 既存特徴量を上書き
                         </label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Generate Features</button>
+                    <button type="submit" class="btn btn-primary">特徴量生成</button>
                 </form>
             </div>
         </div>

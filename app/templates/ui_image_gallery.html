@@ -1,31 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}FXLab - {{ dataset.name }} Images{% endblock %}
+{% block title %}FXLab - {{ dataset.name }} 画像ギャラリー{% endblock %}
 
 {% block content %}
 <div class="container">
     <div class="header-row">
-        <h1>{{ dataset.name }} - Image Gallery</h1>
-        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; Back to Dataset</a>
+        <h1>{{ dataset.name }} - 画像ギャラリー</h1>
+        <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; データセットに戻る</a>
     </div>
 
     {% if feat %}
     <div class="info-section" style="margin-bottom: 1rem; padding: 0.75rem 1rem;">
-        <strong>Feature filter:</strong> <code>{{ feat }} {{ '&gt;' if op == 'gt' else '&lt;' }} {{ thr }}</code>
-        &nbsp; <a href="/ui/datasets/{{ dataset.id }}/images?label={{ label }}" class="btn btn-small">Clear filter</a>
+        <strong>特徴フィルタ:</strong> <code>{{ feat_display }}（{{ feat }}） {{ '&gt;' if op == 'gt' else '&lt;' }} {{ thr }}</code>
+        &nbsp; <a href="/ui/datasets/{{ dataset.id }}/images?label={{ label }}" class="btn btn-small">フィルタ解除</a>
     </div>
     {% endif %}
 
     <div class="gallery-controls">
         <div class="filter-bar">
-            <span>Filter by label:</span>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=all{{ feat_qs }}" class="btn btn-small {% if label == 'all' %}btn-primary{% endif %}">All</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit{{ feat_qs }}" class="btn btn-small {% if label == 'tp_hit' %}btn-primary{% endif %}">TP Hit</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit{{ feat_qs }}" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">SL Hit</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither{{ feat_qs }}" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">Neither</a>
+            <span>ラベル絞り込み:</span>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=all{{ feat_qs }}" class="btn btn-small {% if label == 'all' %}btn-primary{% endif %}">すべて</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit{{ feat_qs }}" class="btn btn-small {% if label == 'tp_hit' %}btn-primary{% endif %}">勝ち</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit{{ feat_qs }}" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">負け</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither{{ feat_qs }}" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">どちらでもない</a>
         </div>
         <div class="gallery-info">
-            <span>{{ total }} images | Page {{ page }}/{{ total_pages }}</span>
+            <span>{{ total }} 件 | ページ {{ page }}/{{ total_pages }}</span>
         </div>
     </div>
 
@@ -46,21 +46,21 @@
 
     <div class="pagination">
         {% if page > 1 %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}{{ feat_qs }}" class="btn">&larr; Previous</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}{{ feat_qs }}" class="btn">&larr; 前へ</a>
         {% else %}
-        <span class="btn btn-disabled">&larr; Previous</span>
+        <span class="btn btn-disabled">&larr; 前へ</span>
         {% endif %}
 
-        <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
+        <span class="page-info">ページ {{ page }} / {{ total_pages }}</span>
 
         {% if page < total_pages %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}{{ feat_qs }}" class="btn">Next &rarr;</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}{{ feat_qs }}" class="btn">次へ &rarr;</a>
         {% else %}
-        <span class="btn btn-disabled">Next &rarr;</span>
+        <span class="btn btn-disabled">次へ &rarr;</span>
         {% endif %}
     </div>
     {% else %}
-    <p class="empty-state">No images found. <a href="/ui/datasets/{{ dataset.id }}">Generate images</a> first.</p>
+    <p class="empty-state">画像が見つかりません。<a href="/ui/datasets/{{ dataset.id }}">画像を生成</a>してください。</p>
     {% endif %}
 </div>
 {% endblock %}
