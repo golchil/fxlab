@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}FXLab{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/ui" class="logo">FXLab</a>
+            <ul>
+                <li><a href="/ui/datasets">Datasets</a></li>
+                <li><a href="/ui/import">Import CSV</a></li>
+                <li><a href="/docs" target="_blank">API Docs</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        {% if error %}
+        <div class="error-message">{{ error }}</div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p>FXLab v0.1.0</p>
+    </footer>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

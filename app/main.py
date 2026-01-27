@@ -1,6 +1,8 @@
+import os
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
-from app.routers import datasets, jobs
+from app.routers import datasets, jobs, ui
 
 app = FastAPI(
     title="FXLab",
@@ -8,8 +10,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Mount static files
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Include routers
 app.include_router(datasets.router)
 app.include_router(jobs.router)
+app.include_router(ui.router)
 
 
 @app.get("/")

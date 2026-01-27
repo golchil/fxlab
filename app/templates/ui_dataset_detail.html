@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - {{ dataset.name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>{{ dataset.name }}</h1>
+        <a href="/ui/datasets" class="btn">&larr; Back to List</a>
+    </div>
+
+    <section class="info-section">
+        <h2>Dataset Info</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>ID</label>
+                <span>{{ dataset.id }}</span>
+            </div>
+            <div class="info-item">
+                <label>Timezone</label>
+                <span>{{ dataset.timezone }}</span>
+            </div>
+            <div class="info-item">
+                <label>Bar Count</label>
+                <span>{{ dataset.bar_count or 0 }}</span>
+            </div>
+            <div class="info-item">
+                <label>Period</label>
+                <span>
+                    {% if dataset.start_ts and dataset.end_ts %}
+                    {{ dataset.start_ts.strftime('%Y-%m-%d %H:%M') }} - {{ dataset.end_ts.strftime('%Y-%m-%d %H:%M') }}
+                    {% else %}
+                    -
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats-section">
+        <div class="stats-row">
+            <div class="stat-box">
+                <h3>Windows Stats</h3>
+                <div class="stat-content">
+                    <p><strong>Total:</strong> {{ windows_stats.total_windows }}</p>
+                    {% if windows_stats.lookback_n %}
+                    <p><strong>Lookback N:</strong> {{ windows_stats.lookback_n }}</p>
+                    {% endif %}
+                    {% if windows_stats.earliest_start %}
+                    <p><strong>Range:</strong> {{ windows_stats.earliest_start.strftime('%Y-%m-%d %H:%M') }} - {{ windows_stats.latest_end.strftime('%Y-%m-%d %H:%M') if windows_stats.latest_end else '-' }}</p>
+                    {% endif %}
+                    {% if windows_stats.generated_count %}
+                    <p><strong>Last Generated:</strong> {{ windows_stats.generated_count }} windows</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="stat-box">
+                <h3>Labels Stats</h3>
+                <div class="stat-content">
+                    <p><strong>Total:</strong> {{ labels_stats.total_labels }}</p>
+                    {% if labels_stats.total_labels > 0 %}
+                    <p><strong>TP Hit:</strong> {{ labels_stats.tp_hit_count }} ({{ "%.1f"|format(labels_stats.tp_hit_ratio * 100) }}%)</p>
+                    <p><strong>SL Hit:</strong> {{ labels_stats.sl_hit_count }} ({{ "%.1f"|format(labels_stats.sl_hit_ratio * 100) }}%)</p>
+                    <p><strong>Neither:</strong> {{ labels_stats.neither_count }}</p>
+                    {% endif %}
+                    {% if labels_stats.generated_count %}
+                    <p><strong>Last Generated:</strong> {{ labels_stats.generated_count }} labels</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="actions-section">
+        <h2>Generate</h2>
+        <div class="forms-row">
+            <div class="form-box">
+                <h3>Generate Windows</h3>
+                <form action="/ui/datasets/{{ dataset.id }}/windows" method="post">
+                    <div class="form-group">
+                        <label for="lookback_n">Lookback N</label>
+                        <input type="number" id="lookback_n" name="lookback_n" value="128" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="step">Step</label>
+                        <input type="number" id="step" name="step" value="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="windows_limit">Limit (optional)</label>
+                        <input type="number" id="windows_limit" name="limit" placeholder="No limit">
+                    </div>
+                    <div class="form-group">
+                        <label for="windows_start_ts">Start (ISO8601, optional)</label>
+                        <input type="text" id="windows_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="windows_end_ts">End (ISO8601, optional)</label>
+                        <input type="text" id="windows_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Generate Windows</button>
+                </form>
+            </div>
+            <div class="form-box">
+                <h3>Generate Labels (TP/SL)</h3>
+                <form action="/ui/datasets/{{ dataset.id }}/labels" method="post">
+                    <div class="form-group">
+                        <label for="lookahead_m">Lookahead M</label>
+                        <input type="number" id="lookahead_m" name="lookahead_m" value="32" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="tp_r">TP Ratio</label>
+                        <input type="number" id="tp_r" name="tp_r" value="1.0" step="0.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_r">SL Ratio</label>
+                        <input type="number" id="sl_r" name="sl_r" value="1.0" step="0.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="labels_limit">Limit (optional)</label>
+                        <input type="number" id="labels_limit" name="limit" placeholder="No limit">
+                    </div>
+                    <div class="form-group">
+                        <label for="labels_start_ts">Start (ISO8601, optional)</label>
+                        <input type="text" id="labels_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="labels_end_ts">End (ISO8601, optional)</label>
+                        <input type="text" id="labels_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Generate Labels</button>
+                </form>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

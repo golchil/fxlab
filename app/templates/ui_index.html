@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - Home{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>FXLab Dashboard</h1>
+    <p>ForexTester CSV import, window generation, and TP/SL labeling system.</p>
+
+    <div class="cards">
+        <a href="/ui/datasets" class="card">
+            <h2>Datasets</h2>
+            <p>View and manage imported datasets</p>
+        </a>
+        <a href="/ui/import" class="card">
+            <h2>Import CSV</h2>
+            <p>Upload new ForexTester CSV files</p>
+        </a>
+    </div>
+</div>
+{% endblock %}

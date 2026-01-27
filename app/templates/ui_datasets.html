@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - Datasets{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>Datasets</h1>
+        <a href="/ui/import" class="btn btn-primary">Import CSV</a>
+    </div>
+
+    {% if datasets %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Timezone</th>
+                <th>Bar Count</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ds in datasets %}
+            <tr>
+                <td>{{ ds.id }}</td>
+                <td>{{ ds.name }}</td>
+                <td>{{ ds.timezone }}</td>
+                <td>{{ ds.bar_count or 0 }}</td>
+                <td>{{ ds.start_ts.strftime('%Y-%m-%d %H:%M') if ds.start_ts else '-' }}</td>
+                <td>{{ ds.end_ts.strftime('%Y-%m-%d %H:%M') if ds.end_ts else '-' }}</td>
+                <td><a href="/ui/datasets/{{ ds.id }}" class="btn btn-small">Details</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No datasets found. <a href="/ui/import">Import a CSV file</a> to get started.</p>
+    {% endif %}
+</div>
+{% endblock %}

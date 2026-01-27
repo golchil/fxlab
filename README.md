@@ -117,3 +117,35 @@ curl -X POST http://localhost:18000/datasets/1/labels/tp-sl \
 curl http://localhost:18000/datasets/1/windows/stats
 curl http://localhost:18000/datasets/1/labels/stats
 ```
+
+## Web UI
+
+FXLab includes a web-based management interface accessible at `http://localhost:18000/ui`.
+
+### UI Features
+
+| Page | URL | Description |
+|------|-----|-------------|
+| Home | `/ui` | Dashboard with links to main features |
+| Datasets | `/ui/datasets` | List all imported datasets |
+| Dataset Detail | `/ui/datasets/{id}` | View dataset info, stats, and generate windows/labels |
+| Import CSV | `/ui/import` | Upload ForexTester CSV files |
+| Job Status | `/ui/jobs/{id}` | Monitor job progress (auto-refreshes every 3 seconds) |
+
+### UI Workflow
+
+1. **Import CSV**: Navigate to `/ui/import`, fill in the form and upload a CSV file
+2. **Monitor Import**: You'll be redirected to the job status page to track progress
+3. **View Dataset**: Once complete, go to `/ui/datasets` and click "Details"
+4. **Generate Windows**: On the dataset detail page, set parameters and click "Generate Windows"
+5. **Generate Labels**: Similarly, configure TP/SL parameters and click "Generate Labels"
+6. **View Stats**: Stats are displayed on the dataset detail page after generation completes
+
+### Parameter Notes
+
+- **Lookback N**: Number of bars to include in each window (default: 128)
+- **Step**: Step size between consecutive windows (default: 1)
+- **Lookahead M**: Number of bars to look ahead for TP/SL calculation (default: 32)
+- **TP/SL Ratio**: Take profit and stop loss ratios (default: 1.0)
+- **Limit**: Maximum number of windows/labels to generate (optional)
+- **Start/End TS**: ISO8601 datetime to filter bars (e.g., `2003-06-01T00:00:00Z`)

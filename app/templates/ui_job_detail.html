@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - Job #{{ job.id }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>Job #{{ job.id }}</h1>
+        {% if job.dataset_id %}
+        <a href="/ui/datasets/{{ job.dataset_id }}" class="btn">&larr; Back to Dataset</a>
+        {% else %}
+        <a href="/ui/datasets" class="btn">&larr; Back to Datasets</a>
+        {% endif %}
+    </div>
+
+    <section class="info-section">
+        <div class="info-grid">
+            <div class="info-item">
+                <label>Type</label>
+                <span>{{ job.job_type }}</span>
+            </div>
+            <div class="info-item">
+                <label>Status</label>
+                <span id="job-status" class="status status-{{ job.status }}">{{ job.status }}</span>
+            </div>
+            <div class="info-item">
+                <label>Created</label>
+                <span>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+            </div>
+            <div class="info-item">
+                <label>Updated</label>
+                <span id="job-updated">{{ job.updated_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+            </div>
+        </div>
+    </section>
+
+    {% if job.params %}
+    <section class="info-section">
+        <h2>Parameters</h2>
+        <pre id="job-params">{{ job.params }}</pre>
+    </section>
+    {% endif %}
+
+    <section class="info-section" id="result-section" {% if not job.result %}style="display:none"{% endif %}>
+        <h2>Result</h2>
+        <pre id="job-result">{{ job.result or '' }}</pre>
+    </section>
+
+    <section class="info-section error-section" id="error-section" {% if not job.error %}style="display:none"{% endif %}>
+        <h2>Error</h2>
+        <pre id="job-error" class="error-text">{{ job.error or '' }}</pre>
+    </section>
+
+    <div id="polling-status" class="polling-indicator">
+        <span class="spinner"></span> Auto-refreshing...
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const jobId = {{ job.id }};
+    const statusEl = document.getElementById('job-status');
+    const updatedEl = document.getElementById('job-updated');
+    const resultSection = document.getElementById('result-section');
+    const resultEl = document.getElementById('job-result');
+    const errorSection = document.getElementById('error-section');
+    const errorEl = document.getElementById('job-error');
+    const pollingStatus = document.getElementById('polling-status');
+
+    let intervalId = null;
+
+    function updateJob() {
+        fetch('/jobs/' + jobId)
+            .then(r => r.json())
+            .then(job => {
+                statusEl.textContent = job.status;
+                statusEl.className = 'status status-' + job.status;
+                updatedEl.textContent = job.updated_at.replace('T', ' ').substring(0, 19);
+
+                if (job.result) {
+                    resultSection.style.display = 'block';
+                    resultEl.textContent = job.result;
+                }
+
+                if (job.error) {
+                    errorSection.style.display = 'block';
+                    errorEl.textContent = job.error;
+                }
+
+                if (job.status === 'completed' || job.status === 'failed') {
+                    clearInterval(intervalId);
+                    pollingStatus.style.display = 'none';
+                }
+            })
+            .catch(err => console.error('Failed to fetch job:', err));
+    }
+
+    // Start polling if job is not finished
+    const currentStatus = '{{ job.status }}';
+    if (currentStatus !== 'completed' && currentStatus !== 'failed') {
+        intervalId = setInterval(updateJob, 3000);
+    } else {
+        pollingStatus.style.display = 'none';
+    }
+})();
+</script>
+{% endblock %}
