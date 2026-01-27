@@ -9,13 +9,20 @@
         <a href="/ui/datasets/{{ dataset.id }}" class="btn">&larr; Back to Dataset</a>
     </div>
 
+    {% if feat %}
+    <div class="info-section" style="margin-bottom: 1rem; padding: 0.75rem 1rem;">
+        <strong>Feature filter:</strong> <code>{{ feat }} {{ '&gt;' if op == 'gt' else '&lt;' }} {{ thr }}</code>
+        &nbsp; <a href="/ui/datasets/{{ dataset.id }}/images?label={{ label }}" class="btn btn-small">Clear filter</a>
+    </div>
+    {% endif %}
+
     <div class="gallery-controls">
         <div class="filter-bar">
             <span>Filter by label:</span>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=all" class="btn btn-small {% if label == 'all' %}btn-primary{% endif %}">All</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit" class="btn btn-small {% if label == 'tp_hit' %}btn-primary{% endif %}">TP Hit</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">SL Hit</a>
-            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">Neither</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=all{{ feat_qs }}" class="btn btn-small {% if label == 'all' %}btn-primary{% endif %}">All</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit{{ feat_qs }}" class="btn btn-small {% if label == 'tp_hit' %}btn-primary{% endif %}">TP Hit</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit{{ feat_qs }}" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">SL Hit</a>
+            <a href="/ui/datasets/{{ dataset.id }}/images?label=neither{{ feat_qs }}" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">Neither</a>
         </div>
         <div class="gallery-info">
             <span>{{ total }} images | Page {{ page }}/{{ total_pages }}</span>
@@ -25,7 +32,7 @@
     {% if images %}
     <div class="gallery-grid">
         {% for img in images %}
-        <a href="/ui/datasets/{{ dataset.id }}/images/{{ img.id }}?label={{ label }}" class="gallery-item">
+        <a href="/ui/datasets/{{ dataset.id }}/images/{{ img.id }}?label={{ label }}{{ feat_qs }}" class="gallery-item">
             <img src="{{ img.image_url }}" alt="Window {{ img.window_id }}" loading="lazy">
             <div class="gallery-item-info">
                 <span class="gallery-ts">{{ img.end_ts.strftime('%Y-%m-%d %H:%M') }}</span>
@@ -39,7 +46,7 @@
 
     <div class="pagination">
         {% if page > 1 %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}" class="btn">&larr; Previous</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}{{ feat_qs }}" class="btn">&larr; Previous</a>
         {% else %}
         <span class="btn btn-disabled">&larr; Previous</span>
         {% endif %}
@@ -47,7 +54,7 @@
         <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
 
         {% if page < total_pages %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}" class="btn">Next &rarr;</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}{{ feat_qs }}" class="btn">Next &rarr;</a>
         {% else %}
         <span class="btn btn-disabled">Next &rarr;</span>
         {% endif %}

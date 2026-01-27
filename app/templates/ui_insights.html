@@ -90,6 +90,7 @@
                     <th>SL Count</th>
                     <th>Precision</th>
                     <th>Improvement</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -105,6 +106,9 @@
                         <span class="label-badge {% if improvement > 0 %}label-tp_hit{% else %}label-neither{% endif %}">
                             +{{ "%.2f"|format(improvement * 100) }}pp
                         </span>
+                    </td>
+                    <td>
+                        <a href="/ui/datasets/{{ dataset.id }}/images?label=tp_hit&feat={{ s.feature_name }}&op={{ 'gt' if s.operator == '>' else 'lt' }}&thr={{ s.threshold }}" class="btn btn-small btn-primary">View images</a>
                     </td>
                 </tr>
                 {% endfor %}

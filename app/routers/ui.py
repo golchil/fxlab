@@ -701,20 +701,49 @@ def ui_insights(
     })
 
 
+FEATURE_COLUMNS = {
+    "sma5_slope_5": WindowFeature.sma5_slope_5,
+    "sma20_slope_5": WindowFeature.sma20_slope_5,
+    "sma20_slope_20": WindowFeature.sma20_slope_20,
+    "sma60_slope_20": WindowFeature.sma60_slope_20,
+    "close_to_sma20": WindowFeature.close_to_sma20,
+    "spread_5_20": WindowFeature.spread_5_20,
+    "spread_20_60": WindowFeature.spread_20_60,
+    "atr14": WindowFeature.atr14,
+    "vol_mean": WindowFeature.vol_mean,
+}
+
+
 @router.get("/datasets/{dataset_id}/images", response_class=HTMLResponse)
 def ui_image_gallery(
     request: Request,
     dataset_id: int,
     page: int = 1,
     label: str = "all",
+    feat: Optional[str] = None,
+    op: Optional[str] = None,
+    thr: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Image gallery page."""
+    """Image gallery page with optional feature filter."""
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not dataset:
         return RedirectResponse(url="/ui/datasets", status_code=303)
 
     page_size = 50
+
+    # Parse feature filter
+    feat_filter = None
+    if feat and op and thr and feat in FEATURE_COLUMNS:
+        try:
+            thr_val = float(thr)
+            col = FEATURE_COLUMNS[feat]
+            if op == "gt":
+                feat_filter = col > thr_val
+            elif op == "lt":
+                feat_filter = col < thr_val
+        except ValueError:
+            pass
 
     # Build query
     query = (
@@ -727,6 +756,9 @@ def ui_image_gallery(
     if label and label != "all":
         query = query.filter(Label.result == label)
 
+    if feat_filter is not None:
+        query = query.join(WindowFeature, WindowFeature.window_id == Window.id).filter(feat_filter)
+
     # Count
     count_q = (
         db.query(func.count(WindowImage.id))
@@ -735,6 +767,8 @@ def ui_image_gallery(
     )
     if label and label != "all":
         count_q = count_q.join(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts)).filter(Label.result == label)
+    if feat_filter is not None:
+        count_q = count_q.join(WindowFeature, WindowFeature.window_id == Window.id).filter(feat_filter)
     total = count_q.scalar() or 0
 
     # Paginate
@@ -759,6 +793,11 @@ def ui_image_gallery(
 
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
 
+    # Build extra query string for feature filter
+    feat_qs = ""
+    if feat and op and thr:
+        feat_qs = f"&feat={feat}&op={op}&thr={thr}"
+
     return templates.TemplateResponse("ui_image_gallery.html", {
         "request": request,
         "dataset": {"id": dataset_id, "name": dataset.name},
@@ -768,6 +807,10 @@ def ui_image_gallery(
         "page_size": page_size,
         "total_pages": total_pages,
         "label": label,
+        "feat": feat or "",
+        "op": op or "",
+        "thr": thr or "",
+        "feat_qs": feat_qs,
     })
 
 
