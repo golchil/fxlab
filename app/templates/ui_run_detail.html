@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - 実行結果 #{{ run.id }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>実行結果 #{{ run.id }}</h1>
+        {% if strategy %}
+        <a href="/ui/strategies/{{ strategy.id }}" class="btn">&larr; {{ strategy.name }} に戻る</a>
+        {% endif %}
+    </div>
+
+    <section class="info-section">
+        <h2>実行情報</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>手法</label>
+                <span>{{ strategy.name if strategy else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>データセット</label>
+                <span>{{ dataset.name if dataset else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>通貨ペア</label>
+                <span>{{ instrument.symbol if instrument else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>時間足</label>
+                <span>{{ timeframe.name if timeframe else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>状態</label>
+                <span>
+                    {% if run.status == "completed" %}
+                    <strong style="color: green;">完了</strong>
+                    {% elif run.status == "running" %}
+                    <strong style="color: orange;">実行中</strong>
+                    {% elif run.status == "failed" %}
+                    <strong style="color: red;">失敗</strong>
+                    {% else %}
+                    {{ run.status }}
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
+                <label>実行日</label>
+                <span>{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+        </div>
+    </section>
+
+    {% if result %}
+    <section class="stats-section">
+        <h2>サマリ統計</h2>
+        <div class="stats-row">
+            <div class="stat-box">
+                <h3>取引概要</h3>
+                <div class="stat-content">
+                    <p><strong>取引回数:</strong> {{ result.total_trades }}</p>
+                    <p><strong>勝ち:</strong> {{ result.wins }}</p>
+                    <p><strong>負け:</strong> {{ result.losses }}</p>
+                    <p><strong>勝率:</strong> {{ "%.1f" | format(result.win_rate * 100) }}%</p>
+                </div>
+            </div>
+            <div class="stat-box">
+                <h3>損益</h3>
+                <div class="stat-content">
+                    <p><strong>合計 pips:</strong>
+                        <span style="color: {{ 'green' if result.total_pnl_pips > 0 else 'red' if result.total_pnl_pips < 0 else 'inherit' }};">
+                            {{ result.total_pnl_pips }}
+                        </span>
+                    </p>
+                    <p><strong>平均 pips:</strong> {{ result.avg_pnl_pips }}</p>
+                    <p><strong>プロフィットファクター:</strong> {{ result.profit_factor }}</p>
+                    <p><strong>平均 R倍率:</strong> {{ result.avg_r }}</p>
+                </div>
+            </div>
+            <div class="stat-box">
+                <h3>リスク</h3>
+                <div class="stat-content">
+                    <p><strong>最大ドローダウン:</strong> {{ result.max_dd }} pips</p>
+                    <p><strong>最大連勝:</strong> {{ result.max_consecutive_wins }}</p>
+                    <p><strong>最大連敗:</strong> {{ result.max_consecutive_losses }}</p>
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if trades %}
+    <section class="info-section">
+        <h2>取引一覧 ({{ trades | length }} 件)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>方向</th>
+                    <th>エントリー日時</th>
+                    <th>エントリー価格</th>
+                    <th>決済日時</th>
+                    <th>決済価格</th>
+                    <th>損益 (pips)</th>
+                    <th>R倍率</th>
+                    <th>理由</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in trades %}
+                <tr style="background-color: {{ '#e8f5e9' if t.pnl_pips and t.pnl_pips > 0 else '#ffebee' if t.pnl_pips and t.pnl_pips < 0 else 'inherit' }};">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ "L" if t.side == "long" else "S" }}</td>
+                    <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') if t.entry_ts else "-" }}</td>
+                    <td>{{ "%.5f" | format(t.entry_price) if t.entry_price else "-" }}</td>
+                    <td>{{ t.exit_ts.strftime('%Y-%m-%d %H:%M') if t.exit_ts else "-" }}</td>
+                    <td>{{ "%.5f" | format(t.exit_price) if t.exit_price else "-" }}</td>
+                    <td style="font-weight: bold; color: {{ 'green' if t.pnl_pips and t.pnl_pips > 0 else 'red' if t.pnl_pips and t.pnl_pips < 0 else 'inherit' }};">
+                        {{ t.pnl_pips if t.pnl_pips is not none else "-" }}
+                    </td>
+                    <td>{{ t.r_multiple if t.r_multiple is not none else "-" }}</td>
+                    <td>
+                        {% if t.exit_reason == "tp" %}TP
+                        {% elif t.exit_reason == "sl" %}SL
+                        {% elif t.exit_reason == "time" %}時間切れ
+                        {% elif t.exit_reason == "session_end" %}セッション終了
+                        {% elif t.exit_reason == "end_of_data" %}データ終了
+                        {% else %}{{ t.exit_reason or "-" }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% elif run.status == "completed" %}
+    <p>取引はありませんでした。</p>
+    {% endif %}
+</div>
+{% endblock %}

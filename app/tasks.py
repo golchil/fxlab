@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade
 from app.config import settings as app_settings
 
 celery_app = Celery(
@@ -723,6 +723,373 @@ def generate_window_features_task(
             job.status = "failed"
             job.error = str(e)
             db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def backtest_task(
+    self, job_id: int, run_id: int, strategy_id: int,
+    start_ts: str = None, end_ts: str = None
+):
+    """
+    Run backtest for a strategy.
+    Walks bars in time order, evaluates rule_json conditions on window_features,
+    manages positions with TP/SL/max_hold/session_end exits.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == run_id).first()
+        run.status = "running"
+        db.commit()
+
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise ValueError(f"Strategy {strategy_id} not found")
+
+        rules = json.loads(strategy.rule_json)
+        allowed_weekdays = set(int(d) for d in strategy.weekdays.split(",") if d.strip())
+
+        # Parse session times
+        sess_start_h, sess_start_m = map(int, strategy.session_start.split(":"))
+        sess_end_h, sess_end_m = map(int, strategy.session_end.split(":"))
+        sess_start_minutes = sess_start_h * 60 + sess_start_m
+        sess_end_minutes = sess_end_h * 60 + sess_end_m
+        # Day-crossing: session_start > session_end (e.g. 21:00-02:00)
+        day_crossing = sess_start_minutes > sess_end_minutes
+
+        tz = pytz.timezone("Asia/Tokyo")
+
+        # Load bars for this dataset/instrument/timeframe
+        query = db.query(Bar).filter(
+            Bar.dataset_id == strategy.dataset_id,
+            Bar.instrument_id == strategy.instrument_id,
+            Bar.timeframe_id == strategy.timeframe_id,
+        )
+
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end)
+
+        bars = query.order_by(Bar.ts).all()
+
+        if not bars:
+            run.status = "completed"
+            run.result_json = json.dumps({"total_trades": 0, "message": "No bars found"})
+            job.status = "completed"
+            job.result = json.dumps({"total_trades": 0})
+            db.commit()
+            return {"total_trades": 0}
+
+        # Build feature lookup: window.end_ts -> WindowFeature dict
+        windows_with_features = (
+            db.query(Window, WindowFeature)
+            .join(WindowFeature, WindowFeature.window_id == Window.id)
+            .filter(
+                Window.dataset_id == strategy.dataset_id,
+                Window.instrument_id == strategy.instrument_id,
+                Window.timeframe_id == strategy.timeframe_id,
+            )
+            .all()
+        )
+
+        feature_names = [
+            "sma5_slope_5", "sma20_slope_5", "sma20_slope_20", "sma60_slope_20",
+            "close_to_sma20", "spread_5_20", "spread_20_60", "atr14", "vol_mean",
+        ]
+        feature_map = {}
+        feature_map_naive = {}
+        for window, wf in windows_with_features:
+            feat_dict = {name: getattr(wf, name) for name in feature_names}
+            feature_map[window.end_ts] = feat_dict
+            naive_utc = window.end_ts.replace(tzinfo=None) if window.end_ts.tzinfo else window.end_ts
+            feature_map_naive[naive_utc] = feat_dict
+
+        def get_features_for_bar(bar):
+            if bar.ts in feature_map:
+                return feature_map[bar.ts]
+            ts_naive = bar.ts.replace(tzinfo=None) if bar.ts.tzinfo else bar.ts
+            if ts_naive in feature_map_naive:
+                return feature_map_naive[ts_naive]
+            return None
+
+        def is_in_session(bar_ts):
+            if bar_ts.tzinfo is None:
+                bar_ts = pytz.utc.localize(bar_ts)
+            local_ts = bar_ts.astimezone(tz)
+            if local_ts.weekday() not in allowed_weekdays:
+                return False
+            bar_minutes = local_ts.hour * 60 + local_ts.minute
+            if day_crossing:
+                return bar_minutes >= sess_start_minutes or bar_minutes < sess_end_minutes
+            else:
+                return sess_start_minutes <= bar_minutes < sess_end_minutes
+
+        def evaluate_rules(features, rules_list):
+            for rule in rules_list:
+                feat_name = rule.get("feature")
+                operator = rule.get("operator")
+                threshold = rule.get("value")
+                if feat_name not in features:
+                    return False
+                val = features[feat_name]
+                if operator == ">" and not (val > threshold):
+                    return False
+                elif operator == "<" and not (val < threshold):
+                    return False
+                elif operator == ">=" and not (val >= threshold):
+                    return False
+                elif operator == "<=" and not (val <= threshold):
+                    return False
+            return True
+
+        # Pip size heuristic
+        sample_close = bars[0].close
+        pip_size = 0.01 if sample_close > 50 else 0.0001
+
+        # Walk bars
+        trades_list = []
+        position = None
+        cooldown_remaining = 0
+
+        for i, bar in enumerate(bars):
+            if position is not None:
+                position["hold_bars"] += 1
+                exited = False
+                exit_price = None
+                exit_reason = None
+
+                side = position["side"]
+                tp_price = position["tp_price"]
+                sl_price = position["sl_price"]
+
+                if side == "long":
+                    if bar.high >= tp_price:
+                        exit_price = tp_price
+                        exit_reason = "tp"
+                        exited = True
+                    elif bar.low <= sl_price:
+                        exit_price = sl_price
+                        exit_reason = "sl"
+                        exited = True
+                else:
+                    if bar.low <= tp_price:
+                        exit_price = tp_price
+                        exit_reason = "tp"
+                        exited = True
+                    elif bar.high >= sl_price:
+                        exit_price = sl_price
+                        exit_reason = "sl"
+                        exited = True
+
+                if not exited and position["hold_bars"] >= strategy.max_hold_bars:
+                    exit_price = bar.close
+                    exit_reason = "time"
+                    exited = True
+
+                if not exited and not is_in_session(bar.ts):
+                    exit_price = bar.close
+                    exit_reason = "session_end"
+                    exited = True
+
+                if exited:
+                    if side == "long":
+                        pnl_pips = (exit_price - position["entry_price"]) / pip_size
+                    else:
+                        pnl_pips = (position["entry_price"] - exit_price) / pip_size
+                    pnl_pips -= strategy.fee_pips
+
+                    sl_dist = abs(position["entry_price"] - position["sl_raw"]) / pip_size
+                    r_multiple = pnl_pips / sl_dist if sl_dist > 0 else 0
+
+                    trades_list.append(Trade(
+                        run_id=run_id,
+                        entry_ts=position["entry_ts"],
+                        entry_price=position["entry_price"],
+                        exit_ts=bar.ts,
+                        exit_price=exit_price,
+                        side=side,
+                        pnl_pips=round(pnl_pips, 2),
+                        r_multiple=round(r_multiple, 4),
+                        exit_reason=exit_reason,
+                    ))
+                    position = None
+                    cooldown_remaining = strategy.cooldown_bars
+            else:
+                if cooldown_remaining > 0:
+                    cooldown_remaining -= 1
+                    continue
+
+                if not is_in_session(bar.ts):
+                    continue
+
+                features = get_features_for_bar(bar)
+                if features is None:
+                    continue
+
+                if not evaluate_rules(features, rules):
+                    continue
+
+                atr14 = features.get("atr14", 0)
+                side = strategy.side
+
+                if strategy.entry_timing == "next_open" and i + 1 < len(bars):
+                    entry_price = bars[i + 1].open
+                    entry_ts = bars[i + 1].ts
+                else:
+                    entry_price = bar.close
+                    entry_ts = bar.ts
+
+                if strategy.tp_type == "atr":
+                    tp_dist = atr14 * strategy.tp_value
+                else:
+                    tp_dist = strategy.tp_value * pip_size
+
+                if strategy.sl_type == "atr":
+                    sl_dist = atr14 * strategy.sl_value
+                else:
+                    sl_dist = strategy.sl_value * pip_size
+
+                if side == "long":
+                    tp_price = entry_price + tp_dist
+                    sl_price = entry_price - sl_dist
+                    sl_raw = entry_price - sl_dist
+                else:
+                    tp_price = entry_price - tp_dist
+                    sl_price = entry_price + sl_dist
+                    sl_raw = entry_price + sl_dist
+
+                position = {
+                    "entry_ts": entry_ts,
+                    "entry_price": entry_price,
+                    "side": side,
+                    "tp_price": tp_price,
+                    "sl_price": sl_price,
+                    "sl_raw": sl_raw,
+                    "hold_bars": 0,
+                    "atr14": atr14,
+                }
+
+        # Close open position at end of data
+        if position is not None:
+            last_bar = bars[-1]
+            side = position["side"]
+            exit_price = last_bar.close
+            if side == "long":
+                pnl_pips = (exit_price - position["entry_price"]) / pip_size
+            else:
+                pnl_pips = (position["entry_price"] - exit_price) / pip_size
+            pnl_pips -= strategy.fee_pips
+            sl_dist = abs(position["entry_price"] - position["sl_raw"]) / pip_size
+            r_multiple = pnl_pips / sl_dist if sl_dist > 0 else 0
+            trades_list.append(Trade(
+                run_id=run_id,
+                entry_ts=position["entry_ts"],
+                entry_price=position["entry_price"],
+                exit_ts=last_bar.ts,
+                exit_price=exit_price,
+                side=side,
+                pnl_pips=round(pnl_pips, 2),
+                r_multiple=round(r_multiple, 4),
+                exit_reason="end_of_data",
+            ))
+
+        if trades_list:
+            db.bulk_save_objects(trades_list)
+            db.commit()
+
+        # Calculate summary
+        total_trades = len(trades_list)
+        if total_trades > 0:
+            pnls = [t.pnl_pips for t in trades_list]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p <= 0]
+            win_count = len(wins)
+            loss_count = len(losses)
+            win_rate = win_count / total_trades
+
+            gross_profit = sum(wins) if wins else 0
+            gross_loss = abs(sum(losses)) if losses else 0
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else 999.99
+
+            r_multiples = [t.r_multiple for t in trades_list]
+            avg_r = sum(r_multiples) / len(r_multiples)
+            total_pnl_pips = sum(pnls)
+            avg_pnl_pips = total_pnl_pips / total_trades
+
+            cumulative = 0
+            peak = 0
+            max_dd = 0
+            for p in pnls:
+                cumulative += p
+                if cumulative > peak:
+                    peak = cumulative
+                dd = peak - cumulative
+                if dd > max_dd:
+                    max_dd = dd
+
+            max_consec_wins = 0
+            max_consec_losses = 0
+            current_consec = 0
+            current_is_win = None
+            for p in pnls:
+                is_win = p > 0
+                if is_win == current_is_win:
+                    current_consec += 1
+                else:
+                    current_consec = 1
+                    current_is_win = is_win
+                if is_win and current_consec > max_consec_wins:
+                    max_consec_wins = current_consec
+                if not is_win and current_consec > max_consec_losses:
+                    max_consec_losses = current_consec
+
+            result_summary = {
+                "total_trades": total_trades,
+                "wins": win_count, "losses": loss_count,
+                "win_rate": round(win_rate, 4),
+                "profit_factor": round(min(profit_factor, 999.99), 2),
+                "avg_r": round(avg_r, 4),
+                "max_dd": round(max_dd, 2),
+                "total_pnl_pips": round(total_pnl_pips, 2),
+                "avg_pnl_pips": round(avg_pnl_pips, 2),
+                "max_consecutive_wins": max_consec_wins,
+                "max_consecutive_losses": max_consec_losses,
+            }
+        else:
+            result_summary = {
+                "total_trades": 0, "wins": 0, "losses": 0,
+                "win_rate": 0, "profit_factor": 0, "avg_r": 0, "max_dd": 0,
+                "total_pnl_pips": 0, "avg_pnl_pips": 0,
+                "max_consecutive_wins": 0, "max_consecutive_losses": 0,
+            }
+
+        run.status = "completed"
+        run.result_json = json.dumps(result_summary)
+        job.status = "completed"
+        job.result = json.dumps(result_summary)
+        db.commit()
+
+        return result_summary
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+        run_obj = db.query(BacktestRun).filter(BacktestRun.id == run_id).first()
+        if run_obj:
+            run_obj.status = "failed"
+        db.commit()
         raise
     finally:
         db.close()

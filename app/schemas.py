@@ -224,3 +224,70 @@ class TimeframeInfoItem(BaseModel):
     bar_count: int
     start_ts: Optional[datetime] = None
     end_ts: Optional[datetime] = None
+
+
+# Strategy schemas
+class StrategyCreate(BaseModel):
+    name: str
+    dataset_id: int
+    instrument_id: int
+    timeframe_id: int
+    side: str = "long"
+    session_start: str = "00:00"
+    session_end: str = "23:59"
+    weekdays: str = "0,1,2,3,4"
+    entry_timing: str = "close"
+    rule_json: str
+    tp_type: str = "atr"
+    tp_value: float = 1.5
+    sl_type: str = "atr"
+    sl_value: float = 1.0
+    max_hold_bars: int = 100
+    cooldown_bars: int = 0
+    fee_pips: float = 0.0
+
+
+class StrategyResponse(BaseModel):
+    id: int
+    name: str
+    dataset_id: int
+    instrument_id: int
+    timeframe_id: int
+    side: str
+    session_start: str
+    session_end: str
+    weekdays: str
+    entry_timing: str
+    rule_json: str
+    tp_type: str
+    tp_value: float
+    sl_type: str
+    sl_value: float
+    max_hold_bars: int
+    cooldown_bars: int
+    fee_pips: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RunCreate(BaseModel):
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+
+
+class TradeResponse(BaseModel):
+    id: int
+    run_id: int
+    entry_ts: datetime
+    entry_price: float
+    exit_ts: Optional[datetime] = None
+    exit_price: Optional[float] = None
+    side: str
+    pnl_pips: Optional[float] = None
+    r_multiple: Optional[float] = None
+    exit_reason: Optional[str] = None
+
+    class Config:
+        from_attributes = True

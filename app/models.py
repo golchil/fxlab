@@ -24,6 +24,7 @@ class Dataset(Base):
     labels: Mapped[list["Label"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     window_images: Mapped[list["WindowImage"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     window_features: Mapped[list["WindowFeature"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    strategies: Mapped[list["Strategy"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -172,4 +173,81 @@ class WindowImage(Base):
     __table_args__ = (
         Index("ix_window_images_dataset_created", "dataset_id", "created_at"),
         Index("ix_window_images_dataset_window", "dataset_id", "window_id"),
+    )
+
+
+class Strategy(Base):
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    side: Mapped[str] = mapped_column(String(16))  # long, short
+    session_start: Mapped[str] = mapped_column(String(8))  # HH:MM (JST)
+    session_end: Mapped[str] = mapped_column(String(8))  # HH:MM (JST)
+    weekdays: Mapped[str] = mapped_column(Text, default="0,1,2,3,4")  # 0=Mon..4=Fri
+    entry_timing: Mapped[str] = mapped_column(String(16), default="close")  # close, next_open
+    rule_json: Mapped[str] = mapped_column(Text)  # JSON rule
+    tp_type: Mapped[str] = mapped_column(String(16), default="atr")  # atr, pips
+    tp_value: Mapped[float] = mapped_column(Float)
+    sl_type: Mapped[str] = mapped_column(String(16), default="atr")  # atr, pips
+    sl_value: Mapped[float] = mapped_column(Float)
+    max_hold_bars: Mapped[int] = mapped_column(Integer, default=100)
+    cooldown_bars: Mapped[int] = mapped_column(Integer, default=0)
+    fee_pips: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship(back_populates="strategies")
+    instrument: Mapped["Instrument"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship()
+    runs: Mapped[list["BacktestRun"]] = relationship(back_populates="strategy", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_strategies_dataset", "dataset_id"),
+    )
+
+
+class BacktestRun(Base):
+    __tablename__ = "backtest_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id", ondelete="CASCADE"))
+    job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    start_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    params_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    strategy: Mapped["Strategy"] = relationship(back_populates="runs")
+    job: Mapped[Optional["Job"]] = relationship()
+    trades: Mapped[list["Trade"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_backtest_runs_strategy", "strategy_id"),
+    )
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"))
+    entry_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    side: Mapped[str] = mapped_column(String(16))
+    pnl_pips: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    r_multiple: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    exit_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    meta_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    run: Mapped["BacktestRun"] = relationship(back_populates="trades")
+
+    __table_args__ = (
+        Index("ix_trades_run", "run_id"),
     )

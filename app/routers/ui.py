@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
-    generate_window_images_task, generate_window_features_task, resample_bars_task
+    generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -33,6 +33,7 @@ FEATURE_DISPLAY_NAMES = {
 # Get the templates directory path
 templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=templates_dir)
+templates.env.filters["from_json"] = lambda s: json.loads(s) if s else {}
 
 
 def get_dataset_response(dataset: Dataset, db: Session):
@@ -994,6 +995,203 @@ def ui_image_detail(
         "prev_id": prev_img[0] if prev_img else None,
         "next_id": next_img[0] if next_img else None,
         "current_label": label,
+    })
+
+
+@router.get("/strategies", response_class=HTMLResponse)
+def ui_strategies(request: Request, db: Session = Depends(get_db)):
+    """Strategy list page with create form."""
+    strategies = db.query(Strategy).order_by(Strategy.created_at.desc()).all()
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
+    timeframes = db.query(Timeframe).order_by(Timeframe.minutes).all()
+    instruments = db.query(Instrument).all()
+    return templates.TemplateResponse("ui_strategies.html", {
+        "request": request,
+        "strategies": strategies,
+        "datasets": dataset_list,
+        "timeframes": timeframes,
+        "instruments": instruments,
+    })
+
+
+@router.post("/strategies")
+def ui_create_strategy(
+    request: Request,
+    name: str = Form(...),
+    dataset_id: int = Form(...),
+    instrument_id: int = Form(...),
+    timeframe_id: int = Form(...),
+    side: str = Form("long"),
+    session_start: str = Form("00:00"),
+    session_end: str = Form("23:59"),
+    weekdays: Optional[str] = Form(None),
+    entry_timing: str = Form("close"),
+    rule_json: str = Form("[]"),
+    tp_type: str = Form("atr"),
+    tp_value: float = Form(1.5),
+    sl_type: str = Form("atr"),
+    sl_value: float = Form(1.0),
+    max_hold_bars: int = Form(100),
+    cooldown_bars: int = Form(0),
+    fee_pips: float = Form(0.0),
+    db: Session = Depends(get_db),
+):
+    """Create a strategy from form submission."""
+    # weekdays comes from checkboxes: "0,1,2,3,4" or None
+    if not weekdays or weekdays.strip() == "":
+        weekdays = "0,1,2,3,4"
+
+    strategy = Strategy(
+        name=name,
+        dataset_id=dataset_id,
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        side=side,
+        session_start=session_start,
+        session_end=session_end,
+        weekdays=weekdays,
+        entry_timing=entry_timing,
+        rule_json=rule_json,
+        tp_type=tp_type,
+        tp_value=tp_value,
+        sl_type=sl_type,
+        sl_value=sl_value,
+        max_hold_bars=max_hold_bars,
+        cooldown_bars=cooldown_bars,
+        fee_pips=fee_pips,
+        created_at=datetime.utcnow(),
+    )
+    db.add(strategy)
+    db.commit()
+    db.refresh(strategy)
+    return RedirectResponse(url=f"/ui/strategies/{strategy.id}", status_code=303)
+
+
+@router.get("/strategies/{strategy_id}", response_class=HTMLResponse)
+def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends(get_db)):
+    """Strategy detail page with run form and past runs."""
+    strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+    if not strategy:
+        return RedirectResponse(url="/ui/strategies", status_code=303)
+
+    dataset = db.query(Dataset).filter(Dataset.id == strategy.dataset_id).first()
+    instrument = db.query(Instrument).filter(Instrument.id == strategy.instrument_id).first()
+    timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
+
+    runs = (
+        db.query(BacktestRun)
+        .filter(BacktestRun.strategy_id == strategy_id)
+        .order_by(BacktestRun.created_at.desc())
+        .all()
+    )
+
+    # Parse rule_json for display
+    try:
+        rules = json.loads(strategy.rule_json)
+    except Exception:
+        rules = []
+
+    return templates.TemplateResponse("ui_strategy_detail.html", {
+        "request": request,
+        "strategy": strategy,
+        "dataset": dataset,
+        "instrument": instrument,
+        "timeframe": timeframe,
+        "runs": runs,
+        "rules": rules,
+        "feat_names": FEATURE_DISPLAY_NAMES,
+    })
+
+
+@router.post("/strategies/{strategy_id}/run")
+def ui_run_backtest(
+    request: Request,
+    strategy_id: int,
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Start a backtest run."""
+    strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+    if not strategy:
+        return RedirectResponse(url="/ui/strategies", status_code=303)
+
+    start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+    end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+
+    job = Job(
+        dataset_id=strategy.dataset_id,
+        job_type="backtest",
+        status="pending",
+        params=json.dumps({
+            "strategy_id": strategy_id,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    run = BacktestRun(
+        strategy_id=strategy_id,
+        job_id=job.id,
+        start_ts=start_ts_val,
+        end_ts=end_ts_val,
+        status="pending",
+        params_json=json.dumps({
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }),
+        created_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    backtest_task.delay(
+        job_id=job.id,
+        run_id=run.id,
+        strategy_id=strategy_id,
+        start_ts=start_ts_val.isoformat() if start_ts_val else None,
+        end_ts=end_ts_val.isoformat() if end_ts_val else None,
+    )
+
+    return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+
+@router.get("/runs/{run_id}", response_class=HTMLResponse)
+def ui_run_detail(request: Request, run_id: int, db: Session = Depends(get_db)):
+    """Run detail page with summary and trade list."""
+    run = db.query(BacktestRun).filter(BacktestRun.id == run_id).first()
+    if not run:
+        return RedirectResponse(url="/ui/strategies", status_code=303)
+
+    strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first()
+    dataset = db.query(Dataset).filter(Dataset.id == strategy.dataset_id).first() if strategy else None
+    instrument = db.query(Instrument).filter(Instrument.id == strategy.instrument_id).first() if strategy else None
+    timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first() if strategy else None
+
+    trades = db.query(Trade).filter(Trade.run_id == run_id).order_by(Trade.entry_ts).all()
+
+    # Parse result summary
+    result_summary = None
+    if run.result_json:
+        try:
+            result_summary = json.loads(run.result_json)
+        except Exception:
+            pass
+
+    return templates.TemplateResponse("ui_run_detail.html", {
+        "request": request,
+        "run": run,
+        "strategy": strategy,
+        "dataset": dataset,
+        "instrument": instrument,
+        "timeframe": timeframe,
+        "trades": trades,
+        "result": result_summary,
     })
 
 

@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - {{ strategy.name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>{{ strategy.name }}</h1>
+        <a href="/ui/strategies" class="btn">&larr; 手法一覧に戻る</a>
+    </div>
+
+    <section class="info-section">
+        <h2>パラメータ</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>ID</label>
+                <span>{{ strategy.id }}</span>
+            </div>
+            <div class="info-item">
+                <label>データセット</label>
+                <span>{{ dataset.name if dataset else "-" }} (ID:{{ strategy.dataset_id }})</span>
+            </div>
+            <div class="info-item">
+                <label>通貨ペア</label>
+                <span>{{ instrument.symbol if instrument else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>時間足</label>
+                <span>{{ timeframe.name if timeframe else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>方向</label>
+                <span>{{ "ロング" if strategy.side == "long" else "ショート" }}</span>
+            </div>
+            <div class="info-item">
+                <label>セッション (JST)</label>
+                <span>{{ strategy.session_start }} - {{ strategy.session_end }}</span>
+            </div>
+            <div class="info-item">
+                <label>曜日</label>
+                <span>{{ strategy.weekdays }}</span>
+            </div>
+            <div class="info-item">
+                <label>エントリー</label>
+                <span>{{ "現バー終値" if strategy.entry_timing == "close" else "次バー始値" }}</span>
+            </div>
+            <div class="info-item">
+                <label>TP</label>
+                <span>{{ strategy.tp_type }} x {{ strategy.tp_value }}</span>
+            </div>
+            <div class="info-item">
+                <label>SL</label>
+                <span>{{ strategy.sl_type }} x {{ strategy.sl_value }}</span>
+            </div>
+            <div class="info-item">
+                <label>最大保有</label>
+                <span>{{ strategy.max_hold_bars }} 本</span>
+            </div>
+            <div class="info-item">
+                <label>クールダウン</label>
+                <span>{{ strategy.cooldown_bars }} 本</span>
+            </div>
+            <div class="info-item">
+                <label>手数料</label>
+                <span>{{ strategy.fee_pips }} pips</span>
+            </div>
+            <div class="info-item">
+                <label>作成日</label>
+                <span>{{ strategy.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="info-section">
+        <h2>エントリー条件</h2>
+        {% if rules %}
+        <table>
+            <thead>
+                <tr>
+                    <th>特徴量</th>
+                    <th>演算子</th>
+                    <th>閾値</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rule in rules %}
+                <tr>
+                    <td>{{ feat_names.get(rule.feature, rule.feature) }}</td>
+                    <td><code>{{ rule.operator }}</code></td>
+                    <td>{{ rule.value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>条件なし（全バーでエントリー）</p>
+        {% endif %}
+    </section>
+
+    <section class="actions-section">
+        <h2>バックテスト実行</h2>
+        <div class="forms-row">
+            <div class="form-box">
+                <form action="/ui/strategies/{{ strategy.id }}/run" method="post">
+                    <div class="form-group">
+                        <label for="bt_start_ts">開始日時（ISO8601、任意）</label>
+                        <input type="text" id="bt_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="bt_end_ts">終了日時（ISO8601、任意）</label>
+                        <input type="text" id="bt_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <button type="submit" class="btn btn-primary">バックテスト実行</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    {% if runs %}
+    <section class="info-section">
+        <h2>実行履歴</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Run ID</th>
+                    <th>状態</th>
+                    <th>取引数</th>
+                    <th>勝率</th>
+                    <th>PF</th>
+                    <th>合計pips</th>
+                    <th>実行日</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in runs %}
+                <tr>
+                    <td><a href="/ui/runs/{{ r.id }}">{{ r.id }}</a></td>
+                    <td>
+                        {% if r.status == "completed" %}
+                        <span style="color: green;">完了</span>
+                        {% elif r.status == "running" %}
+                        <span style="color: orange;">実行中</span>
+                        {% elif r.status == "failed" %}
+                        <span style="color: red;">失敗</span>
+                        {% else %}
+                        {{ r.status }}
+                        {% endif %}
+                    </td>
+                    {% if r.result_json %}
+                    {% set res = r.result_json | tojson %}
+                    <td>{{ (r.result_json | from_json).get('total_trades', '-') if r.result_json else '-' }}</td>
+                    <td>{{ "%.1f" | format(((r.result_json | from_json).get('win_rate', 0)) * 100) }}%</td>
+                    <td>{{ (r.result_json | from_json).get('profit_factor', '-') }}</td>
+                    <td>{{ (r.result_json | from_json).get('total_pnl_pips', '-') }}</td>
+                    {% else %}
+                    <td>-</td><td>-</td><td>-</td><td>-</td>
+                    {% endif %}
+                    <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

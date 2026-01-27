@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - 手法一覧{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>手法一覧</h1>
+    </div>
+
+    {% if strategies %}
+    <section class="info-section">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>名前</th>
+                    <th>データセット</th>
+                    <th>方向</th>
+                    <th>時間帯(JST)</th>
+                    <th>TP/SL</th>
+                    <th>作成日</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in strategies %}
+                <tr>
+                    <td>{{ s.id }}</td>
+                    <td><a href="/ui/strategies/{{ s.id }}">{{ s.name }}</a></td>
+                    <td>{{ s.dataset_id }}</td>
+                    <td>{{ "ロング" if s.side == "long" else "ショート" }}</td>
+                    <td>{{ s.session_start }} - {{ s.session_end }}</td>
+                    <td>{{ s.tp_type }}:{{ s.tp_value }} / {{ s.sl_type }}:{{ s.sl_value }}</td>
+                    <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% else %}
+    <p>手法がまだ登録されていません。</p>
+    {% endif %}
+
+    <section class="actions-section">
+        <h2>手法を作成</h2>
+        <form action="/ui/strategies" method="post">
+            <div class="forms-row">
+                <div class="form-box">
+                    <h3>基本設定</h3>
+                    <div class="form-group">
+                        <label for="name">手法名</label>
+                        <input type="text" id="name" name="name" required placeholder="MA乖離押し目ロング">
+                    </div>
+                    <div class="form-group">
+                        <label for="dataset_id">データセット</label>
+                        <select id="dataset_id" name="dataset_id" required>
+                            {% for ds in datasets %}
+                            <option value="{{ ds.id }}">{{ ds.name }} (ID:{{ ds.id }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="instrument_id">通貨ペア</label>
+                        <select id="instrument_id" name="instrument_id" required>
+                            {% for inst in instruments %}
+                            <option value="{{ inst.id }}">{{ inst.symbol }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="timeframe_id">時間足</label>
+                        <select id="timeframe_id" name="timeframe_id" required>
+                            {% for tf in timeframes %}
+                            <option value="{{ tf.id }}">{{ tf.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="side">方向</label>
+                        <select id="side" name="side">
+                            <option value="long">ロング (買い)</option>
+                            <option value="short">ショート (売り)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-box">
+                    <h3>セッション・タイミング</h3>
+                    <div class="form-group">
+                        <label for="session_start">セッション開始 (JST, HH:MM)</label>
+                        <input type="text" id="session_start" name="session_start" value="09:00">
+                    </div>
+                    <div class="form-group">
+                        <label for="session_end">セッション終了 (JST, HH:MM)</label>
+                        <input type="text" id="session_end" name="session_end" value="15:00">
+                    </div>
+                    <div class="form-group">
+                        <label>曜日 (0=月..4=金)</label>
+                        <input type="text" id="weekdays" name="weekdays" value="0,1,2,3,4" placeholder="0,1,2,3,4">
+                    </div>
+                    <div class="form-group">
+                        <label for="entry_timing">エントリータイミング</label>
+                        <select id="entry_timing" name="entry_timing">
+                            <option value="close">現バー終値</option>
+                            <option value="next_open">次バー始値</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="cooldown_bars">クールダウン (本数)</label>
+                        <input type="number" id="cooldown_bars" name="cooldown_bars" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="fee_pips">手数料 (pips)</label>
+                        <input type="number" id="fee_pips" name="fee_pips" value="0" step="0.1">
+                    </div>
+                </div>
+
+                <div class="form-box">
+                    <h3>TP / SL 設定</h3>
+                    <div class="form-group">
+                        <label for="tp_type">TP タイプ</label>
+                        <select id="tp_type" name="tp_type">
+                            <option value="atr" selected>ATR倍率</option>
+                            <option value="pips">固定pips</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tp_value">TP 値</label>
+                        <input type="number" id="tp_value" name="tp_value" value="1.5" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_type">SL タイプ</label>
+                        <select id="sl_type" name="sl_type">
+                            <option value="atr" selected>ATR倍率</option>
+                            <option value="pips">固定pips</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_value">SL 値</label>
+                        <input type="number" id="sl_value" name="sl_value" value="1.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="max_hold_bars">最大保有バー数</label>
+                        <input type="number" id="max_hold_bars" name="max_hold_bars" value="100">
+                    </div>
+                </div>
+
+                <div class="form-box">
+                    <h3>エントリー条件 (rule_json)</h3>
+                    <div class="form-group">
+                        <label for="rule_json">ルール JSON (AND条件)</label>
+                        <textarea id="rule_json" name="rule_json" rows="8" style="width:100%;font-family:monospace;">[
+  {"feature": "close_to_sma20", "operator": "<", "value": -0.5},
+  {"feature": "sma20_slope_20", "operator": ">", "value": 0}
+]</textarea>
+                    </div>
+                    <p style="font-size: 0.85em; color: #666;">
+                        feature: sma5_slope_5, sma20_slope_5, sma20_slope_20, sma60_slope_20,
+                        close_to_sma20, spread_5_20, spread_20_60, atr14, vol_mean<br>
+                        operator: &gt;, &lt;, &gt;=, &lt;=
+                    </p>
+                    <div style="margin-top: 0.5rem;">
+                        <button type="button" class="btn btn-small" onclick="setPreset('pullback_long')">押し目ロング</button>
+                        <button type="button" class="btn btn-small" onclick="setPreset('pullback_short')">戻り目ショート</button>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 1rem;">
+                <button type="submit" class="btn btn-primary">手法を作成</button>
+            </div>
+        </form>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setPreset(type) {
+    const textarea = document.getElementById('rule_json');
+    const sideSelect = document.getElementById('side');
+    if (type === 'pullback_long') {
+        textarea.value = JSON.stringify([
+            {"feature": "close_to_sma20", "operator": "<", "value": -0.5},
+            {"feature": "sma20_slope_20", "operator": ">", "value": 0}
+        ], null, 2);
+        sideSelect.value = 'long';
+    } else if (type === 'pullback_short') {
+        textarea.value = JSON.stringify([
+            {"feature": "close_to_sma20", "operator": ">", "value": 0.5},
+            {"feature": "sma20_slope_20", "operator": "<", "value": 0}
+        ], null, 2);
+        sideSelect.value = 'short';
+    }
+}
+</script>
+{% endblock %}
