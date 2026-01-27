@@ -138,15 +138,25 @@
         <h2>時間足変換</h2>
         <div class="forms-row">
             <div class="form-box">
-                <h3>リサンプル（M1→H1）</h3>
+                <h3>時間足リサンプル</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/resample" method="post">
                     <div class="form-group">
                         <label for="resample_from_tf">変換元</label>
-                        <input type="text" id="resample_from_tf" name="from_tf" value="M1" required>
+                        <select id="resample_from_tf" name="from_tf" required>
+                            <option value="M1" selected>M1（1分足）</option>
+                            <option value="M5">M5（5分足）</option>
+                            <option value="M15">M15（15分足）</option>
+                            <option value="H1">H1（1時間足）</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="resample_to_tf">変換先</label>
-                        <input type="text" id="resample_to_tf" name="to_tf" value="H1" required>
+                        <select id="resample_to_tf" name="to_tf" required>
+                            <option value="M5">M5（5分足）</option>
+                            <option value="M15">M15（15分足）</option>
+                            <option value="H1" selected>H1（1時間足）</option>
+                            <option value="H4">H4（4時間足）</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="resample_limit">件数上限（任意）</label>

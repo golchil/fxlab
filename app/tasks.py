@@ -796,10 +796,19 @@ def resample_bars_task(
                 if bar_ts.tzinfo is None:
                     bar_ts = pytz.utc.localize(bar_ts)
                 local_ts = bar_ts.astimezone(tz)
-                bucket_dt = local_ts.replace(minute=0, second=0, microsecond=0)
-                if bucket_minutes > 60:
-                    hour = (local_ts.hour // (bucket_minutes // 60)) * (bucket_minutes // 60)
-                    bucket_dt = bucket_dt.replace(hour=hour)
+                # Floor to bucket boundary based on bucket_minutes
+                if bucket_minutes < 60:
+                    # Sub-hour: floor minute to nearest multiple (M5, M15, etc.)
+                    floored_min = (local_ts.minute // bucket_minutes) * bucket_minutes
+                    bucket_dt = local_ts.replace(minute=floored_min, second=0, microsecond=0)
+                elif bucket_minutes == 60:
+                    # Exactly 1 hour
+                    bucket_dt = local_ts.replace(minute=0, second=0, microsecond=0)
+                else:
+                    # Multi-hour (H4, etc.): floor hour to nearest multiple
+                    hours = bucket_minutes // 60
+                    floored_hour = (local_ts.hour // hours) * hours
+                    bucket_dt = local_ts.replace(hour=floored_hour, minute=0, second=0, microsecond=0)
                 buckets[bucket_dt].append(bar)
 
             sorted_buckets = sorted(buckets.items())
