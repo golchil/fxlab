@@ -54,6 +54,9 @@ class ImportRequest(BaseModel):
 class WindowsRequest(BaseModel):
     lookback_n: int = 128
     step: int = 1
+    limit: Optional[int] = None  # None = unlimited
+    start_ts: Optional[datetime] = None  # Filter bars from this timestamp
+    end_ts: Optional[datetime] = None  # Filter bars until this timestamp
 
 
 # Labels TP-SL request
@@ -61,6 +64,9 @@ class LabelsTpSlRequest(BaseModel):
     lookahead_m: int = 32
     tp_r: float = 1.0
     sl_r: float = 1.0
+    limit: Optional[int] = None  # None = unlimited
+    start_ts: Optional[datetime] = None  # Filter bars from this timestamp
+    end_ts: Optional[datetime] = None  # Filter bars until this timestamp
 
 
 # Stats responses
@@ -69,6 +75,10 @@ class WindowsStatsResponse(BaseModel):
     lookback_n: Optional[int] = None
     earliest_start: Optional[datetime] = None
     latest_end: Optional[datetime] = None
+    # Additional generation info (returned when generation completes)
+    generated_count: Optional[int] = None
+    generation_start_ts: Optional[datetime] = None
+    generation_end_ts: Optional[datetime] = None
 
 
 class LabelsStatsResponse(BaseModel):
@@ -78,6 +88,12 @@ class LabelsStatsResponse(BaseModel):
     neither_count: int
     tp_hit_ratio: float
     sl_hit_ratio: float
+    # Additional generation info
+    earliest_bar_ts: Optional[datetime] = None
+    latest_bar_ts: Optional[datetime] = None
+    generated_count: Optional[int] = None
+    generation_start_ts: Optional[datetime] = None
+    generation_end_ts: Optional[datetime] = None
 
 
 # Job created response

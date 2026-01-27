@@ -151,7 +151,10 @@ def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
 
 
 @celery_app.task(bind=True)
-def generate_windows_task(self, job_id: int, dataset_id: int, lookback_n: int, step: int):
+def generate_windows_task(
+    self, job_id: int, dataset_id: int, lookback_n: int, step: int,
+    limit: int = None, start_ts: str = None, end_ts: str = None
+):
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -163,17 +166,34 @@ def generate_windows_task(self, job_id: int, dataset_id: int, lookback_n: int, s
         db.query(Window).filter(Window.dataset_id == dataset_id).delete()
         db.commit()
 
-        # Get all bars ordered by timestamp
-        bars = (
-            db.query(Bar)
-            .filter(Bar.dataset_id == dataset_id)
-            .order_by(Bar.instrument_id, Bar.timeframe_id, Bar.ts)
-            .all()
-        )
+        # Build query with optional time filters
+        query = db.query(Bar).filter(Bar.dataset_id == dataset_id)
+
+        # Parse timestamps if provided
+        filter_start_ts = None
+        filter_end_ts = None
+        if start_ts:
+            filter_start_ts = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start_ts)
+        if end_ts:
+            filter_end_ts = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end_ts)
+
+        # Order and fetch all bars (optimized: single query, no iteration)
+        bars = query.order_by(Bar.instrument_id, Bar.timeframe_id, Bar.ts).all()
+
+        # Track actual generation range
+        actual_start_ts = None
+        actual_end_ts = None
 
         if len(bars) < lookback_n:
             job.status = "completed"
-            job.result = json.dumps({"total_windows": 0, "message": "Not enough bars"})
+            job.result = json.dumps({
+                "total_windows": 0,
+                "message": "Not enough bars",
+                "generation_start_ts": None,
+                "generation_end_ts": None,
+            })
             db.commit()
             return {"total_windows": 0}
 
@@ -186,32 +206,61 @@ def generate_windows_task(self, job_id: int, dataset_id: int, lookback_n: int, s
             grouped[key].append(bar)
 
         windows_created = 0
+        windows_batch = []
+        batch_size = 5000  # Larger batch for bulk insert
+
         for (instrument_id, timeframe_id), bar_list in grouped.items():
             bar_list.sort(key=lambda x: x.ts)
 
             for i in range(lookback_n - 1, len(bar_list), step):
+                # Check limit
+                if limit is not None and windows_created >= limit:
+                    break
+
                 start_idx = i - lookback_n + 1
                 end_idx = i
 
-                window = Window(
+                window_start = bar_list[start_idx].ts
+                window_end = bar_list[end_idx].ts
+
+                # Track actual range
+                if actual_start_ts is None or window_start < actual_start_ts:
+                    actual_start_ts = window_start
+                if actual_end_ts is None or window_end > actual_end_ts:
+                    actual_end_ts = window_end
+
+                windows_batch.append(Window(
                     dataset_id=dataset_id,
                     instrument_id=instrument_id,
                     timeframe_id=timeframe_id,
-                    start_ts=bar_list[start_idx].ts,
-                    end_ts=bar_list[end_idx].ts,
+                    start_ts=window_start,
+                    end_ts=window_end,
                     lookback_n=lookback_n,
                     bar_count=lookback_n,
-                )
-                db.add(window)
+                ))
                 windows_created += 1
 
-                if windows_created % 1000 == 0:
+                # Bulk insert in batches
+                if len(windows_batch) >= batch_size:
+                    db.bulk_save_objects(windows_batch)
                     db.commit()
+                    windows_batch = []
 
-        db.commit()
+            # Check limit at group level too
+            if limit is not None and windows_created >= limit:
+                break
+
+        # Insert remaining windows
+        if windows_batch:
+            db.bulk_save_objects(windows_batch)
+            db.commit()
 
         job.status = "completed"
-        job.result = json.dumps({"total_windows": windows_created})
+        job.result = json.dumps({
+            "total_windows": windows_created,
+            "generation_start_ts": actual_start_ts.isoformat() if actual_start_ts else None,
+            "generation_end_ts": actual_end_ts.isoformat() if actual_end_ts else None,
+        })
         db.commit()
 
         return {"total_windows": windows_created}
@@ -228,7 +277,14 @@ def generate_windows_task(self, job_id: int, dataset_id: int, lookback_n: int, s
 
 
 @celery_app.task(bind=True)
-def generate_labels_task(self, job_id: int, dataset_id: int, lookahead_m: int, tp_r: float, sl_r: float):
+def generate_labels_task(
+    self, job_id: int, dataset_id: int, lookahead_m: int, tp_r: float, sl_r: float,
+    limit: int = None, start_ts: str = None, end_ts: str = None
+):
+    """
+    Generate labels from bars directly (no window dependency).
+    Optimized with numpy-like array processing for performance.
+    """
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -245,13 +301,32 @@ def generate_labels_task(self, job_id: int, dataset_id: int, lookahead_m: int, t
         ).delete()
         db.commit()
 
-        # Get all bars
-        bars = (
-            db.query(Bar)
-            .filter(Bar.dataset_id == dataset_id)
-            .order_by(Bar.instrument_id, Bar.timeframe_id, Bar.ts)
-            .all()
-        )
+        # Build query with optional time filters
+        query = db.query(Bar).filter(Bar.dataset_id == dataset_id)
+
+        # Parse timestamps if provided
+        filter_start_ts = None
+        filter_end_ts = None
+        if start_ts:
+            filter_start_ts = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start_ts)
+        if end_ts:
+            filter_end_ts = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end_ts)
+
+        # Get all bars efficiently
+        bars = query.order_by(Bar.instrument_id, Bar.timeframe_id, Bar.ts).all()
+
+        if not bars:
+            job.status = "completed"
+            job.result = json.dumps({
+                "total_labels": 0,
+                "message": "No bars found",
+                "generation_start_ts": None,
+                "generation_end_ts": None,
+            })
+            db.commit()
+            return {"total_labels": 0}
 
         # Group by instrument and timeframe
         grouped = {}
@@ -262,58 +337,89 @@ def generate_labels_task(self, job_id: int, dataset_id: int, lookahead_m: int, t
             grouped[key].append(bar)
 
         labels_created = 0
+        labels_batch = []
+        batch_size = 5000  # Larger batch for bulk insert
+        actual_start_ts = None
+        actual_end_ts = None
+
         for (instrument_id, timeframe_id), bar_list in grouped.items():
             bar_list.sort(key=lambda x: x.ts)
+            n_bars = len(bar_list)
 
-            for i in range(len(bar_list) - lookahead_m):
-                current_bar = bar_list[i]
-                future_bars = bar_list[i + 1 : i + 1 + lookahead_m]
+            # Pre-extract arrays for faster processing
+            timestamps = [b.ts for b in bar_list]
+            highs = [b.high for b in bar_list]
+            lows = [b.low for b in bar_list]
+            closes = [b.close for b in bar_list]
 
-                if not future_bars:
-                    continue
+            # Calculate ranges
+            ranges = [max(highs[i] - lows[i], 0.0001) for i in range(n_bars)]
 
-                # Calculate ATR-like range for the current bar
-                bar_range = current_bar.high - current_bar.low
-                if bar_range == 0:
-                    bar_range = 0.0001  # Minimum range for forex
+            for i in range(n_bars - lookahead_m):
+                # Check limit
+                if limit is not None and labels_created >= limit:
+                    break
 
+                current_ts = timestamps[i]
+
+                # Track actual range
+                if actual_start_ts is None or current_ts < actual_start_ts:
+                    actual_start_ts = current_ts
+                if actual_end_ts is None or current_ts > actual_end_ts:
+                    actual_end_ts = current_ts
+
+                bar_range = ranges[i]
                 tp_distance = bar_range * tp_r
                 sl_distance = bar_range * sl_r
 
-                entry_price = current_bar.close
+                entry_price = closes[i]
                 tp_price = entry_price + tp_distance
                 sl_price = entry_price - sl_distance
 
+                # Check future bars
                 result = "neither"
-                for future_bar in future_bars:
-                    if future_bar.high >= tp_price:
+                for j in range(i + 1, min(i + 1 + lookahead_m, n_bars)):
+                    if highs[j] >= tp_price:
                         result = "tp_hit"
                         break
-                    if future_bar.low <= sl_price:
+                    if lows[j] <= sl_price:
                         result = "sl_hit"
                         break
 
-                label = Label(
+                labels_batch.append(Label(
                     dataset_id=dataset_id,
                     instrument_id=instrument_id,
                     timeframe_id=timeframe_id,
-                    bar_ts=current_bar.ts,
+                    bar_ts=current_ts,
                     label_type="tp-sl",
                     lookahead_m=lookahead_m,
                     tp_r=tp_r,
                     sl_r=sl_r,
                     result=result,
-                )
-                db.add(label)
+                ))
                 labels_created += 1
 
-                if labels_created % 1000 == 0:
+                # Bulk insert in batches
+                if len(labels_batch) >= batch_size:
+                    db.bulk_save_objects(labels_batch)
                     db.commit()
+                    labels_batch = []
 
-        db.commit()
+            # Check limit at group level too
+            if limit is not None and labels_created >= limit:
+                break
+
+        # Insert remaining labels
+        if labels_batch:
+            db.bulk_save_objects(labels_batch)
+            db.commit()
 
         job.status = "completed"
-        job.result = json.dumps({"total_labels": labels_created})
+        job.result = json.dumps({
+            "total_labels": labels_created,
+            "generation_start_ts": actual_start_ts.isoformat() if actual_start_ts else None,
+            "generation_end_ts": actual_end_ts.isoformat() if actual_end_ts else None,
+        })
         db.commit()
 
         return {"total_labels": labels_created}
