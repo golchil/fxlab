@@ -273,33 +273,58 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
 
 
 @router.get("/import", response_class=HTMLResponse)
-def ui_import_form(request: Request):
+def ui_import_form(request: Request, db: Session = Depends(get_db)):
     """CSV import form."""
-    return templates.TemplateResponse("ui_import.html", {"request": request})
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name, "timezone": ds.timezone} for ds in datasets]
+    return templates.TemplateResponse("ui_import.html", {
+        "request": request,
+        "datasets": dataset_list,
+    })
 
 
 @router.post("/import")
 async def ui_import_submit(
     request: Request,
     file: UploadFile = File(...),
-    name: str = Form(...),
+    name: Optional[str] = Form(None),
     timezone: str = Form("Asia/Tokyo"),
     timeframe: str = Form("M1"),
+    append_mode: Optional[str] = Form(None),
+    dataset_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Handle CSV import submission."""
     try:
+        is_append = append_mode == "on" and dataset_id and dataset_id.strip()
+        target_dataset_id = int(dataset_id) if is_append else None
+
+        if is_append:
+            dataset = db.query(Dataset).filter(Dataset.id == target_dataset_id).first()
+            if not dataset:
+                raise ValueError(f"Dataset {target_dataset_id} not found")
+            if dataset.timezone != timezone:
+                raise ValueError(
+                    f"タイムゾーン不一致: データセット={dataset.timezone}, 指定={timezone}"
+                )
+            label = f"append_{target_dataset_id}"
+        else:
+            if not name or not name.strip():
+                raise ValueError("新規作成の場合はデータセット名が必要です")
+            label = name
+
         # Save uploaded file temporarily
         data_dir = "/app/data"
         os.makedirs(data_dir, exist_ok=True)
 
-        file_path = os.path.join(data_dir, f"upload_{name}_{os.urandom(4).hex()}.csv")
+        file_path = os.path.join(data_dir, f"upload_{label}_{os.urandom(4).hex()}.csv")
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
 
         # Create job
         job = Job(
+            dataset_id=target_dataset_id,
             job_type="import",
             status="pending",
             params=json.dumps({
@@ -307,6 +332,8 @@ async def ui_import_submit(
                 "timezone": timezone,
                 "timeframe": timeframe,
                 "file_path": file_path,
+                "dataset_id": target_dataset_id,
+                "append_mode": is_append,
             }),
         )
         db.add(job)
@@ -317,17 +344,21 @@ async def ui_import_submit(
         import_csv_task.delay(
             job_id=job.id,
             file_path=file_path,
-            dataset_name=name,
+            dataset_name=name or "",
             timezone_str=timezone,
             timeframe_name=timeframe,
             description=None,
+            dataset_id=target_dataset_id,
         )
 
         return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
 
     except Exception as e:
+        datasets = db.query(Dataset).all()
+        dataset_list = [{"id": ds.id, "name": ds.name, "timezone": ds.timezone} for ds in datasets]
         return templates.TemplateResponse("ui_import.html", {
             "request": request,
+            "datasets": dataset_list,
             "error": str(e),
         })
 

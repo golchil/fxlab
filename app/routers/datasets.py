@@ -72,23 +72,43 @@ def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
 @router.post("/import", response_model=JobCreatedResponse)
 async def import_dataset(
     file: UploadFile = File(...),
-    name: str = Form(...),
+    name: str = Form(None),
     description: str = Form(None),
     timezone: str = Form("Asia/Tokyo"),
     timeframe: str = Form("M1"),
+    dataset_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
 ):
+    append_mode = dataset_id is not None
+
+    if append_mode:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+        # Validate timezone match
+        if dataset.timezone != timezone:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Timezone mismatch: dataset={dataset.timezone}, request={timezone}"
+            )
+        label = f"append_{dataset_id}"
+    else:
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required for new dataset")
+        label = name
+
     # Save uploaded file temporarily
     data_dir = "/app/data"
     os.makedirs(data_dir, exist_ok=True)
 
-    file_path = os.path.join(data_dir, f"upload_{name}_{os.urandom(4).hex()}.csv")
+    file_path = os.path.join(data_dir, f"upload_{label}_{os.urandom(4).hex()}.csv")
     with open(file_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
     # Create job
     job = Job(
+        dataset_id=dataset_id,
         job_type="import",
         status="pending",
         params=json.dumps({
@@ -96,6 +116,8 @@ async def import_dataset(
             "timezone": timezone,
             "timeframe": timeframe,
             "file_path": file_path,
+            "dataset_id": dataset_id,
+            "append_mode": append_mode,
         }),
     )
     db.add(job)
@@ -106,13 +128,15 @@ async def import_dataset(
     import_csv_task.delay(
         job_id=job.id,
         file_path=file_path,
-        dataset_name=name,
+        dataset_name=name or "",
         timezone_str=timezone,
         timeframe_name=timeframe,
         description=description,
+        dataset_id=dataset_id,
     )
 
-    return JobCreatedResponse(job_id=job.id, message="Import job started")
+    msg = "Append import job started" if append_mode else "Import job started"
+    return JobCreatedResponse(job_id=job.id, message=msg)
 
 
 @router.post("/{dataset_id}/windows", response_model=JobCreatedResponse)

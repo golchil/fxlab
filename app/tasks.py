@@ -53,7 +53,8 @@ def get_or_create_timeframe(db, name: str) -> Timeframe:
 
 @celery_app.task(bind=True)
 def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
-                    timezone_str: str, timeframe_name: str, description: str = None):
+                    timezone_str: str, timeframe_name: str, description: str = None,
+                    dataset_id: int = None):
     db = SessionLocal()
     try:
         # Update job status
@@ -62,20 +63,41 @@ def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
         job.celery_task_id = self.request.id
         db.commit()
 
-        # Create dataset
-        dataset = Dataset(name=dataset_name, timezone=timezone_str, description=description)
-        db.add(dataset)
-        db.commit()
-        db.refresh(dataset)
+        append_mode = dataset_id is not None
 
-        # Update job with dataset_id
-        job.dataset_id = dataset.id
-        db.commit()
+        if append_mode:
+            # Append mode: use existing dataset
+            dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+            if not dataset:
+                raise ValueError(f"Dataset {dataset_id} not found")
+            job.dataset_id = dataset.id
+            db.commit()
+
+            # Build set of existing bar timestamps for duplicate detection
+            existing_bars = set(
+                (r[0], r[1], r[2])
+                for r in db.query(Bar.instrument_id, Bar.timeframe_id, Bar.ts)
+                .filter(Bar.dataset_id == dataset_id)
+                .all()
+            )
+        else:
+            # New dataset mode
+            dataset = Dataset(name=dataset_name, timezone=timezone_str, description=description)
+            db.add(dataset)
+            db.commit()
+            db.refresh(dataset)
+            job.dataset_id = dataset.id
+            db.commit()
+            existing_bars = set()
 
         tz = pytz.timezone(timezone_str)
         timeframe = get_or_create_timeframe(db, timeframe_name)
 
         total_rows = 0
+        inserted_count = 0
+        skipped_count = 0
+        min_ts = None
+        max_ts = None
         instruments_cache = {}  # ticker -> instrument_id
 
         # Read CSV in chunks
@@ -89,6 +111,7 @@ def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
             bars_to_add = []
 
             for _, row in chunk.iterrows():
+                total_rows += 1
                 ticker = row["ticker"].strip()
 
                 # Get or create instrument
@@ -110,8 +133,22 @@ def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
 
                     local_dt = datetime(year, month, day, hour, minute)
                     aware_dt = tz.localize(local_dt)
-                except Exception as e:
+                except Exception:
                     continue  # Skip invalid rows
+
+                # Duplicate check for append mode
+                if append_mode:
+                    bar_key = (instrument_id, timeframe.id, aware_dt)
+                    if bar_key in existing_bars:
+                        skipped_count += 1
+                        continue
+                    existing_bars.add(bar_key)
+
+                # Track min/max ts
+                if min_ts is None or aware_dt < min_ts:
+                    min_ts = aware_dt
+                if max_ts is None or aware_dt > max_ts:
+                    max_ts = aware_dt
 
                 bar = Bar(
                     dataset_id=dataset.id,
@@ -128,18 +165,23 @@ def import_csv_task(self, job_id: int, file_path: str, dataset_name: str,
 
             db.bulk_save_objects(bars_to_add)
             db.commit()
-            total_rows += len(bars_to_add)
+            inserted_count += len(bars_to_add)
 
         # Update job as completed
         job.status = "completed"
         job.result = json.dumps({
             "dataset_id": dataset.id,
             "total_bars": total_rows,
+            "inserted_count": inserted_count,
+            "skipped_count": skipped_count,
+            "min_ts": min_ts.isoformat() if min_ts else None,
+            "max_ts": max_ts.isoformat() if max_ts else None,
             "instruments": list(instruments_cache.keys()),
+            "append_mode": append_mode,
         })
         db.commit()
 
-        return {"dataset_id": dataset.id, "total_bars": total_rows}
+        return {"dataset_id": dataset.id, "inserted_count": inserted_count, "skipped_count": skipped_count}
 
     except Exception as e:
         job = db.query(Job).filter(Job.id == job_id).first()

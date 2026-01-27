@@ -12,9 +12,31 @@
     <section class="form-section">
         <form action="/ui/import" method="post" enctype="multipart/form-data">
             <div class="form-group">
-                <label for="name">Dataset Name *</label>
-                <input type="text" id="name" name="name" required placeholder="e.g., USDJPY_2024">
+                <label>
+                    <input type="checkbox" id="append_mode" name="append_mode" onchange="toggleAppendMode()">
+                    既存データセットに追加（Append）
+                </label>
             </div>
+
+            <div id="append-section" style="display:none;">
+                <div class="form-group">
+                    <label for="dataset_id">追加先データセット</label>
+                    <select id="dataset_id" name="dataset_id" onchange="onDatasetSelect()">
+                        <option value="">-- 選択してください --</option>
+                        {% for ds in datasets %}
+                        <option value="{{ ds.id }}" data-timezone="{{ ds.timezone }}">{{ ds.name }} (ID:{{ ds.id }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div id="new-section">
+                <div class="form-group">
+                    <label for="name">Dataset Name *</label>
+                    <input type="text" id="name" name="name" placeholder="e.g., USDJPY_2024">
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="timezone">Timezone</label>
                 <input type="text" id="timezone" name="timezone" value="Asia/Tokyo">
@@ -40,4 +62,26 @@
         </form>
     </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAppendMode() {
+    var checked = document.getElementById('append_mode').checked;
+    document.getElementById('append-section').style.display = checked ? 'block' : 'none';
+    document.getElementById('new-section').style.display = checked ? 'none' : 'block';
+    var nameInput = document.getElementById('name');
+    if (checked) {
+        nameInput.removeAttribute('required');
+    }
+}
+
+function onDatasetSelect() {
+    var sel = document.getElementById('dataset_id');
+    var opt = sel.options[sel.selectedIndex];
+    if (opt && opt.dataset.timezone) {
+        document.getElementById('timezone').value = opt.dataset.timezone;
+    }
+}
+</script>
 {% endblock %}
