@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
-    String, Integer, Float, DateTime, ForeignKey, Text, UniqueConstraint, Index, PrimaryKeyConstraint
+    String, Integer, Float, DateTime, Boolean, ForeignKey, Text, UniqueConstraint, Index, PrimaryKeyConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +25,7 @@ class Dataset(Base):
     window_images: Mapped[list["WindowImage"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     window_features: Mapped[list["WindowFeature"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     strategies: Mapped[list["Strategy"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    signals: Mapped[list["Signal"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -176,6 +177,26 @@ class WindowImage(Base):
     )
 
 
+class Signal(Base):
+    __tablename__ = "signals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    signal_type: Mapped[str] = mapped_column(String(64))
+    params_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship(back_populates="signals")
+
+    __table_args__ = (
+        Index("ix_signals_dataset_tf_ts", "dataset_id", "instrument_id", "timeframe_id", "ts"),
+        Index("ix_signals_type", "signal_type"),
+    )
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
 
@@ -197,11 +218,17 @@ class Strategy(Base):
     max_hold_bars: Mapped[int] = mapped_column(Integer, default=100)
     cooldown_bars: Mapped[int] = mapped_column(Integer, default=0)
     fee_pips: Mapped[float] = mapped_column(Float, default=0.0)
+    htf_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
+    htf_signal_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    htf_lookback_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=24)
+    htf_confirmed_only: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
+    require_htf_signal: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="strategies")
     instrument: Mapped["Instrument"] = relationship()
-    timeframe: Mapped["Timeframe"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship(foreign_keys=[timeframe_id])
+    htf_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[htf_timeframe_id])
     runs: Mapped[list["BacktestRun"]] = relationship(back_populates="strategy", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -244,6 +271,7 @@ class Trade(Base):
     pnl_pips: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     r_multiple: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     exit_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    signal_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     meta_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     run: Mapped["BacktestRun"] = relationship(back_populates="trades")

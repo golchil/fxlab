@@ -97,6 +97,7 @@
                 <tr>
                     <th>#</th>
                     <th>方向</th>
+                    <th>シグナル時刻</th>
                     <th>エントリー日時</th>
                     <th>エントリー価格</th>
                     <th>決済日時</th>
@@ -111,6 +112,7 @@
                 <tr style="background-color: {{ '#e8f5e9' if t.pnl_pips and t.pnl_pips > 0 else '#ffebee' if t.pnl_pips and t.pnl_pips < 0 else 'inherit' }};">
                     <td>{{ loop.index }}</td>
                     <td>{{ "L" if t.side == "long" else "S" }}</td>
+                    <td>{{ t.signal_ts.strftime('%Y-%m-%d %H:%M') if t.signal_ts else "-" }}</td>
                     <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') if t.entry_ts else "-" }}</td>
                     <td>{{ "%.5f" | format(t.entry_price) if t.entry_price else "-" }}</td>
                     <td>{{ t.exit_ts.strftime('%Y-%m-%d %H:%M') if t.exit_ts else "-" }}</td>

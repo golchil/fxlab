@@ -65,6 +65,16 @@
                 <span>{{ strategy.fee_pips }} pips</span>
             </div>
             <div class="info-item">
+                <label>HTFフィルタ</label>
+                <span>
+                    {% if strategy.require_htf_signal %}
+                    有効（{{ strategy.htf_signal_type or "-" }}、{{ htf_timeframe.name if htf_timeframe else "-" }}、{{ strategy.htf_lookback_hours or 24 }}時間）
+                    {% else %}
+                    無効
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
                 <label>作成日</label>
                 <span>{{ strategy.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>

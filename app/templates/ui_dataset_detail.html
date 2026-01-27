@@ -131,6 +131,18 @@
                     {% endif %}
                 </div>
             </div>
+            <div class="stat-box">
+                <h3>シグナル統計</h3>
+                <div class="stat-content">
+                    <p><strong>件数:</strong> {{ signals_stats.total_signals }}</p>
+                    {% for st in signals_stats.signal_types %}
+                    <p><strong>{{ st.type }}:</strong> {{ st.count }} 件</p>
+                    {% endfor %}
+                    {% if signals_stats.generated_count %}
+                    <p><strong>前回生成:</strong> {{ signals_stats.generated_count }} 件</p>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </section>
 
@@ -291,6 +303,46 @@
                         </label>
                     </div>
                     <button type="submit" class="btn btn-primary">特徴量生成</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <section class="actions-section">
+        <h2>シグナル生成</h2>
+        <div class="forms-row">
+            <div class="form-box">
+                <h3>ゴールデンクロス検出</h3>
+                <form action="/ui/datasets/{{ dataset.id }}/signals/golden-cross" method="post">
+                    <div class="form-group">
+                        <label for="sig_timeframe">時間足</label>
+                        <select id="sig_timeframe" name="timeframe">
+                            <option value="H1" selected>H1（1時間足）</option>
+                            <option value="H4">H4（4時間足）</option>
+                            <option value="D1">D1（日足）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="fast_ma">短期MA期間</label>
+                        <input type="number" id="fast_ma" name="fast_ma" value="20" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="slow_ma">長期MA期間</label>
+                        <input type="number" id="slow_ma" name="slow_ma" value="60" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sig_limit">件数上限（任意）</label>
+                        <input type="number" id="sig_limit" name="limit" placeholder="上限なし">
+                    </div>
+                    <div class="form-group">
+                        <label for="sig_start_ts">開始日時（ISO8601、任意）</label>
+                        <input type="text" id="sig_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="sig_end_ts">終了日時（ISO8601、任意）</label>
+                        <input type="text" id="sig_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <button type="submit" class="btn btn-primary">シグナル生成</button>
                 </form>
             </div>
         </div>

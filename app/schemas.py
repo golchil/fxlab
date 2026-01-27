@@ -226,6 +226,16 @@ class TimeframeInfoItem(BaseModel):
     end_ts: Optional[datetime] = None
 
 
+# Golden cross signal request
+class GoldenCrossRequest(BaseModel):
+    timeframe: str = "H1"
+    fast_ma: int = 20
+    slow_ma: int = 60
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+    limit: Optional[int] = None
+
+
 # Strategy schemas
 class StrategyCreate(BaseModel):
     name: str
@@ -245,6 +255,11 @@ class StrategyCreate(BaseModel):
     max_hold_bars: int = 100
     cooldown_bars: int = 0
     fee_pips: float = 0.0
+    htf_timeframe_id: Optional[int] = None
+    htf_signal_type: Optional[str] = None
+    htf_lookback_hours: Optional[int] = 24
+    htf_confirmed_only: Optional[bool] = True
+    require_htf_signal: Optional[bool] = False
 
 
 class StrategyResponse(BaseModel):
@@ -266,6 +281,11 @@ class StrategyResponse(BaseModel):
     max_hold_bars: int
     cooldown_bars: int
     fee_pips: float
+    htf_timeframe_id: Optional[int] = None
+    htf_signal_type: Optional[str] = None
+    htf_lookback_hours: Optional[int] = None
+    htf_confirmed_only: Optional[bool] = None
+    require_htf_signal: Optional[bool] = None
     created_at: datetime
 
     class Config:
@@ -288,6 +308,7 @@ class TradeResponse(BaseModel):
     pnl_pips: Optional[float] = None
     r_multiple: Optional[float] = None
     exit_reason: Optional[str] = None
+    signal_ts: Optional[datetime] = None
 
     class Config:
         from_attributes = True

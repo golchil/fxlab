@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade, Signal
 from app.config import settings as app_settings
 
 celery_app = Celery(
@@ -771,6 +771,165 @@ def generate_window_features_task(
 
 
 @celery_app.task(bind=True)
+def golden_cross_task(
+    self, job_id: int, dataset_id: int, timeframe_name: str = "H1",
+    fast_ma: int = 20, slow_ma: int = 60,
+    start_ts: str = None, end_ts: str = None, limit: int = None
+):
+    """
+    Detect SMA golden cross signals on higher timeframe bars.
+    A golden cross: prev bar fast_sma <= slow_sma AND current bar fast_sma > slow_sma.
+    Signal ts = H1 bar bucket start timestamp.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
+
+        timeframe = get_or_create_timeframe(db, timeframe_name)
+        signal_type = f"golden_cross_{fast_ma}_{slow_ma}"
+
+        # Load bars for this timeframe
+        query = db.query(Bar).filter(
+            Bar.dataset_id == dataset_id,
+            Bar.timeframe_id == timeframe.id,
+        )
+
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end)
+
+        bars = query.order_by(Bar.instrument_id, Bar.ts).all()
+
+        if not bars:
+            job.status = "completed"
+            job.result = json.dumps({"signal_count": 0, "message": "No bars found"})
+            db.commit()
+            return {"signal_count": 0}
+
+        # Group by instrument
+        grouped = defaultdict(list)
+        for bar in bars:
+            grouped[bar.instrument_id].append(bar)
+
+        # Build existing signals set for dedup
+        existing_signals = set(
+            (r[0], r[1], r[2], r[3])
+            for r in db.query(Signal.dataset_id, Signal.instrument_id, Signal.timeframe_id, Signal.ts)
+            .filter(Signal.dataset_id == dataset_id, Signal.signal_type == signal_type)
+            .all()
+        )
+
+        signal_count = 0
+        skipped_count = 0
+        signals_batch = []
+        batch_size = 1000
+        params_str = json.dumps({"fast_ma": fast_ma, "slow_ma": slow_ma})
+
+        for instrument_id, bar_list in grouped.items():
+            bar_list.sort(key=lambda b: b.ts)
+            closes = [b.close for b in bar_list]
+            n = len(closes)
+
+            if n < slow_ma + 1:
+                continue
+
+            # Compute SMAs
+            fast_sma = [None] * n
+            slow_sma = [None] * n
+
+            # Fast SMA
+            running_sum = sum(closes[:fast_ma])
+            fast_sma[fast_ma - 1] = running_sum / fast_ma
+            for i in range(fast_ma, n):
+                running_sum += closes[i] - closes[i - fast_ma]
+                fast_sma[i] = running_sum / fast_ma
+
+            # Slow SMA
+            running_sum = sum(closes[:slow_ma])
+            slow_sma[slow_ma - 1] = running_sum / slow_ma
+            for i in range(slow_ma, n):
+                running_sum += closes[i] - closes[i - slow_ma]
+                slow_sma[i] = running_sum / slow_ma
+
+            # Detect crossovers
+            for i in range(slow_ma, n):
+                if limit is not None and signal_count >= limit:
+                    break
+
+                prev_fast = fast_sma[i - 1]
+                prev_slow = slow_sma[i - 1]
+                curr_fast = fast_sma[i]
+                curr_slow = slow_sma[i]
+
+                if prev_fast is None or prev_slow is None:
+                    continue
+
+                # Golden cross: fast crosses above slow
+                if prev_fast <= prev_slow and curr_fast > curr_slow:
+                    bar_ts = bar_list[i].ts
+
+                    sig_key = (dataset_id, instrument_id, timeframe.id, bar_ts)
+                    if sig_key in existing_signals:
+                        skipped_count += 1
+                        continue
+                    existing_signals.add(sig_key)
+
+                    signals_batch.append(Signal(
+                        dataset_id=dataset_id,
+                        instrument_id=instrument_id,
+                        timeframe_id=timeframe.id,
+                        ts=bar_ts,
+                        signal_type=signal_type,
+                        params_json=params_str,
+                        created_at=datetime.utcnow(),
+                    ))
+                    signal_count += 1
+
+                    if len(signals_batch) >= batch_size:
+                        db.bulk_save_objects(signals_batch)
+                        db.commit()
+                        signals_batch = []
+
+            if limit is not None and signal_count >= limit:
+                break
+
+        if signals_batch:
+            db.bulk_save_objects(signals_batch)
+            db.commit()
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "signal_count": signal_count,
+            "skipped_count": skipped_count,
+            "signal_type": signal_type,
+            "timeframe": timeframe_name,
+        })
+        db.commit()
+
+        return {"signal_count": signal_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
 def backtest_task(
     self, job_id: int, run_id: int, strategy_id: int,
     start_ts: str = None, end_ts: str = None
@@ -797,6 +956,39 @@ def backtest_task(
 
         rules = json.loads(strategy.rule_json)
         allowed_weekdays = set(int(d) for d in strategy.weekdays.split(",") if d.strip())
+
+        # HTF signal setup
+        htf_enabled = strategy.require_htf_signal and strategy.htf_signal_type and strategy.htf_timeframe_id
+        htf_signals = []
+        htf_lookback_td = None
+        if htf_enabled:
+            htf_lookback_td = timedelta(hours=strategy.htf_lookback_hours or 24)
+            htf_signals_q = (
+                db.query(Signal.ts)
+                .filter(
+                    Signal.dataset_id == strategy.dataset_id,
+                    Signal.instrument_id == strategy.instrument_id,
+                    Signal.timeframe_id == strategy.htf_timeframe_id,
+                    Signal.signal_type == strategy.htf_signal_type,
+                )
+                .order_by(Signal.ts)
+                .all()
+            )
+            htf_signals = [r[0] for r in htf_signals_q]
+
+        def find_latest_htf_signal(bar_ts):
+            """Find the most recent HTF signal before bar_ts within lookback window."""
+            if not htf_signals:
+                return None
+            import bisect
+            # bar_ts must be timezone-aware
+            idx = bisect.bisect_right(htf_signals, bar_ts) - 1
+            if idx < 0:
+                return None
+            sig_ts = htf_signals[idx]
+            if bar_ts - sig_ts <= htf_lookback_td:
+                return sig_ts
+            return None
 
         # Parse session times
         sess_start_h, sess_start_m = map(int, strategy.session_start.split(":"))
@@ -963,6 +1155,7 @@ def backtest_task(
                         pnl_pips=round(pnl_pips, 2),
                         r_multiple=round(r_multiple, 4),
                         exit_reason=exit_reason,
+                        signal_ts=position.get("signal_ts"),
                     ))
                     position = None
                     cooldown_remaining = strategy.cooldown_bars
@@ -980,6 +1173,13 @@ def backtest_task(
 
                 if not evaluate_rules(features, rules):
                     continue
+
+                # HTF signal check
+                current_signal_ts = None
+                if htf_enabled:
+                    current_signal_ts = find_latest_htf_signal(bar.ts)
+                    if current_signal_ts is None:
+                        continue
 
                 atr14 = features.get("atr14", 0)
                 side = strategy.side
@@ -1019,6 +1219,7 @@ def backtest_task(
                     "sl_raw": sl_raw,
                     "hold_bars": 0,
                     "atr14": atr14,
+                    "signal_ts": current_signal_ts,
                 }
 
         # Close open position at end of data
@@ -1043,6 +1244,7 @@ def backtest_task(
                 pnl_pips=round(pnl_pips, 2),
                 r_multiple=round(r_multiple, 4),
                 exit_reason="end_of_data",
+                signal_ts=position.get("signal_ts"),
             ))
 
         if trades_list:

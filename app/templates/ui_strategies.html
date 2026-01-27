@@ -164,6 +164,35 @@
                         <button type="button" class="btn btn-small" onclick="setPreset('pullback_short')">戻り目ショート</button>
                     </div>
                 </div>
+
+                <div class="form-box">
+                    <h3>上位足フィルタ (HTF)</h3>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="require_htf_signal" name="require_htf_signal" onchange="toggleHtfSection()">
+                            上位足シグナルを必須にする
+                        </label>
+                    </div>
+                    <div id="htf-section" style="display:none;">
+                        <div class="form-group">
+                            <label for="htf_timeframe_id">HTF 時間足</label>
+                            <select id="htf_timeframe_id" name="htf_timeframe_id">
+                                <option value="">-- 選択 --</option>
+                                {% for tf in timeframes %}
+                                <option value="{{ tf.id }}">{{ tf.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="htf_signal_type">シグナルタイプ</label>
+                            <input type="text" id="htf_signal_type" name="htf_signal_type" value="golden_cross_20_60" placeholder="golden_cross_20_60">
+                        </div>
+                        <div class="form-group">
+                            <label for="htf_lookback_hours">有効時間 (時間)</label>
+                            <input type="number" id="htf_lookback_hours" name="htf_lookback_hours" value="24">
+                        </div>
+                    </div>
+                </div>
             </div>
             <div style="margin-top: 1rem;">
                 <button type="submit" class="btn btn-primary">手法を作成</button>
@@ -175,6 +204,11 @@
 
 {% block scripts %}
 <script>
+function toggleHtfSection() {
+    var checked = document.getElementById('require_htf_signal').checked;
+    document.getElementById('htf-section').style.display = checked ? 'block' : 'none';
+}
+
 function setPreset(type) {
     const textarea = document.getElementById('rule_json');
     const sideSelect = document.getElementById('side');

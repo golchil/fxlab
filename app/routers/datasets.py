@@ -14,11 +14,11 @@ from app.schemas import (
     WindowsStatsResponse, LabelsStatsResponse, JobCreatedResponse,
     ImagesRequest, ImagesStatsResponse, ImageListResponse, ImageListItem, ImageDetailResponse,
     FeaturesRequest, FeaturesStatsResponse, InsightsResponse, FeatureRankingItem, ThresholdSuggestion,
-    ResampleRequest, TimeframeInfoItem
+    ResampleRequest, TimeframeInfoItem, GoldenCrossRequest
 )
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
-    generate_window_images_task, generate_window_features_task, resample_bars_task
+    generate_window_images_task, generate_window_features_task, resample_bars_task, golden_cross_task
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -791,3 +791,49 @@ def get_timeframes(dataset_id: int, db: Session = Depends(get_db)):
         )
         for row in rows
     ]
+
+
+# ============ Signals API ============
+
+@router.post("/{dataset_id}/signals/golden-cross", response_model=JobCreatedResponse)
+def create_golden_cross_signals(
+    dataset_id: int,
+    request: GoldenCrossRequest,
+    db: Session = Depends(get_db),
+):
+    """Generate golden cross signals for a dataset."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    params = {
+        "timeframe": request.timeframe,
+        "fast_ma": request.fast_ma,
+        "slow_ma": request.slow_ma,
+        "start_ts": request.start_ts.isoformat() if request.start_ts else None,
+        "end_ts": request.end_ts.isoformat() if request.end_ts else None,
+        "limit": request.limit,
+    }
+
+    job = Job(
+        dataset_id=dataset_id,
+        job_type="signals",
+        status="pending",
+        params=json.dumps(params),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    golden_cross_task.delay(
+        job_id=job.id,
+        dataset_id=dataset_id,
+        timeframe_name=request.timeframe,
+        fast_ma=request.fast_ma,
+        slow_ma=request.slow_ma,
+        start_ts=request.start_ts.isoformat() if request.start_ts else None,
+        end_ts=request.end_ts.isoformat() if request.end_ts else None,
+        limit=request.limit,
+    )
+
+    return JobCreatedResponse(job_id=job.id, message="Golden cross signal generation job started")

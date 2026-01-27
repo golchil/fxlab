@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
-    generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task
+    generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
+    golden_cross_task
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -217,6 +218,33 @@ def get_timeframe_info(dataset_id: int, db: Session):
     ]
 
 
+def get_signals_stats(dataset_id: int, db: Session):
+    """Get signals statistics for a dataset."""
+    total = db.query(func.count(Signal.id)).filter(Signal.dataset_id == dataset_id).scalar() or 0
+    signal_types = (
+        db.query(Signal.signal_type, func.count(Signal.id))
+        .filter(Signal.dataset_id == dataset_id)
+        .group_by(Signal.signal_type)
+        .all()
+    )
+    latest_job = (
+        db.query(Job)
+        .filter(Job.dataset_id == dataset_id, Job.job_type == "signals", Job.status == "completed")
+        .order_by(Job.updated_at.desc())
+        .first()
+    )
+    generated_count = None
+    if latest_job and latest_job.result:
+        result = json.loads(latest_job.result)
+        generated_count = result.get("signal_count")
+
+    return {
+        "total_signals": total,
+        "signal_types": [{"type": t, "count": c} for t, c in signal_types],
+        "generated_count": generated_count,
+    }
+
+
 def parse_optional_datetime(value: str) -> Optional[datetime]:
     """Parse optional ISO8601 datetime string."""
     if not value or value.strip() == "":
@@ -259,6 +287,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
     labels_stats = get_labels_stats(dataset_id, db)
     images_stats = get_images_stats(dataset_id, db)
     features_stats = get_features_stats(dataset_id, db)
+    signals_stats = get_signals_stats(dataset_id, db)
     timeframes = get_timeframe_info(dataset_id, db)
 
     return templates.TemplateResponse("ui_dataset_detail.html", {
@@ -268,6 +297,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "labels_stats": labels_stats,
         "images_stats": images_stats,
         "features_stats": features_stats,
+        "signals_stats": signals_stats,
         "timeframes": timeframes,
     })
 
@@ -699,6 +729,75 @@ def ui_create_resample(
         })
 
 
+@router.post("/datasets/{dataset_id}/signals/golden-cross")
+def ui_create_golden_cross(
+    request: Request,
+    dataset_id: int,
+    timeframe: str = Form("H1"),
+    fast_ma: int = Form(20),
+    slow_ma: int = Form(60),
+    limit: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create golden cross signal generation job."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    try:
+        limit_val = int(limit) if limit and limit.strip() else None
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+
+        params = {
+            "timeframe": timeframe,
+            "fast_ma": fast_ma,
+            "slow_ma": slow_ma,
+            "limit": limit_val,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="signals",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        golden_cross_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            timeframe_name=timeframe,
+            fast_ma=fast_ma,
+            slow_ma=slow_ma,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+            limit=limit_val,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        dataset_data = get_dataset_response(dataset, db)
+        return templates.TemplateResponse("ui_dataset_detail.html", {
+            "request": request,
+            "dataset": dataset_data,
+            "windows_stats": get_windows_stats(dataset_id, db),
+            "labels_stats": get_labels_stats(dataset_id, db),
+            "images_stats": get_images_stats(dataset_id, db),
+            "features_stats": get_features_stats(dataset_id, db),
+            "signals_stats": get_signals_stats(dataset_id, db),
+            "timeframes": get_timeframe_info(dataset_id, db),
+            "error": str(e),
+        })
+
+
 @router.get("/datasets/{dataset_id}/insights", response_class=HTMLResponse)
 def ui_insights(
     request: Request,
@@ -1066,12 +1165,22 @@ def ui_create_strategy(
     max_hold_bars: int = Form(100),
     cooldown_bars: int = Form(0),
     fee_pips: float = Form(0.0),
+    htf_timeframe_id: Optional[str] = Form(None),
+    htf_signal_type: Optional[str] = Form(None),
+    htf_lookback_hours: Optional[str] = Form(None),
+    require_htf_signal: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a strategy from form submission."""
     # weekdays comes from checkboxes: "0,1,2,3,4" or None
     if not weekdays or weekdays.strip() == "":
         weekdays = "0,1,2,3,4"
+
+    # Parse HTF fields
+    htf_tf_id = int(htf_timeframe_id) if htf_timeframe_id and htf_timeframe_id.strip() else None
+    htf_sig = htf_signal_type.strip() if htf_signal_type and htf_signal_type.strip() else None
+    htf_hours = int(htf_lookback_hours) if htf_lookback_hours and htf_lookback_hours.strip() else 24
+    htf_required = require_htf_signal == "on"
 
     strategy = Strategy(
         name=name,
@@ -1091,6 +1200,11 @@ def ui_create_strategy(
         max_hold_bars=max_hold_bars,
         cooldown_bars=cooldown_bars,
         fee_pips=fee_pips,
+        htf_timeframe_id=htf_tf_id,
+        htf_signal_type=htf_sig,
+        htf_lookback_hours=htf_hours,
+        htf_confirmed_only=True,
+        require_htf_signal=htf_required,
         created_at=datetime.utcnow(),
     )
     db.add(strategy)
@@ -1109,6 +1223,7 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
     dataset = db.query(Dataset).filter(Dataset.id == strategy.dataset_id).first()
     instrument = db.query(Instrument).filter(Instrument.id == strategy.instrument_id).first()
     timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
+    htf_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.htf_timeframe_id).first() if strategy.htf_timeframe_id else None
 
     runs = (
         db.query(BacktestRun)
@@ -1129,6 +1244,7 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
         "dataset": dataset,
         "instrument": instrument,
         "timeframe": timeframe,
+        "htf_timeframe": htf_timeframe,
         "runs": runs,
         "rules": rules,
         "feat_names": FEATURE_DISPLAY_NAMES,
