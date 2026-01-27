@@ -206,3 +206,21 @@ class InsightsResponse(BaseModel):
     neither_count: int
     feature_ranking: List[FeatureRankingItem]
     threshold_suggestions: List[ThresholdSuggestion]
+
+
+# Resample request
+class ResampleRequest(BaseModel):
+    from_tf: str = "M1"
+    to_tf: str = "H1"
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+    limit: Optional[int] = None
+
+
+# Timeframe info response
+class TimeframeInfoItem(BaseModel):
+    name: str
+    minutes: int
+    bar_count: int
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None

@@ -1,8 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from celery import Celery
 import pandas as pd
 import pytz
+from collections import defaultdict
 
 from app.config import settings
 from app.database import SessionLocal
@@ -711,6 +712,154 @@ def generate_window_features_task(
         job.result = json.dumps({
             "generated_count": generated_count,
             "skipped_count": skipped_count,
+        })
+        db.commit()
+
+        return {"generated_count": generated_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def resample_bars_task(
+    self, job_id: int, dataset_id: int,
+    from_tf: str = "M1", to_tf: str = "H1",
+    start_ts: str = None, end_ts: str = None, limit: int = None
+):
+    """
+    Resample bars from one timeframe to another (e.g. M1 -> H1).
+    Bucketing is done in Asia/Tokyo timezone.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
+
+        from_timeframe = get_or_create_timeframe(db, from_tf)
+        to_timeframe = get_or_create_timeframe(db, to_tf)
+
+        bucket_minutes = to_timeframe.minutes
+
+        tz = pytz.timezone(dataset.timezone or "Asia/Tokyo")
+
+        query = db.query(Bar).filter(
+            Bar.dataset_id == dataset_id,
+            Bar.timeframe_id == from_timeframe.id,
+        )
+
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end)
+
+        bars = query.order_by(Bar.instrument_id, Bar.ts).all()
+
+        if not bars:
+            job.status = "completed"
+            job.result = json.dumps({
+                "generated_count": 0,
+                "skipped_count": 0,
+                "message": "No source bars found",
+            })
+            db.commit()
+            return {"generated_count": 0}
+
+        grouped = defaultdict(list)
+        for bar in bars:
+            grouped[bar.instrument_id].append(bar)
+
+        generated_count = 0
+        skipped_count = 0
+        batch = []
+        batch_size = 5000
+
+        for instrument_id, bar_list in grouped.items():
+            buckets = defaultdict(list)
+            for bar in bar_list:
+                bar_ts = bar.ts
+                if bar_ts.tzinfo is None:
+                    bar_ts = pytz.utc.localize(bar_ts)
+                local_ts = bar_ts.astimezone(tz)
+                bucket_dt = local_ts.replace(minute=0, second=0, microsecond=0)
+                if bucket_minutes > 60:
+                    hour = (local_ts.hour // (bucket_minutes // 60)) * (bucket_minutes // 60)
+                    bucket_dt = bucket_dt.replace(hour=hour)
+                buckets[bucket_dt].append(bar)
+
+            sorted_buckets = sorted(buckets.items())
+
+            for bucket_ts, bucket_bars in sorted_buckets:
+                if limit is not None and generated_count >= limit:
+                    break
+
+                bucket_bars.sort(key=lambda b: b.ts)
+
+                open_val = bucket_bars[0].open
+                high_val = max(b.high for b in bucket_bars)
+                low_val = min(b.low for b in bucket_bars)
+                close_val = bucket_bars[-1].close
+                volume_val = sum(b.volume for b in bucket_bars)
+
+                bucket_ts_utc = bucket_ts.astimezone(pytz.utc)
+
+                existing = db.query(Bar).filter(
+                    Bar.dataset_id == dataset_id,
+                    Bar.instrument_id == instrument_id,
+                    Bar.timeframe_id == to_timeframe.id,
+                    Bar.ts == bucket_ts_utc,
+                ).first()
+
+                if existing:
+                    skipped_count += 1
+                    continue
+
+                batch.append(Bar(
+                    dataset_id=dataset_id,
+                    instrument_id=instrument_id,
+                    timeframe_id=to_timeframe.id,
+                    ts=bucket_ts_utc,
+                    open=open_val,
+                    high=high_val,
+                    low=low_val,
+                    close=close_val,
+                    volume=volume_val,
+                ))
+                generated_count += 1
+
+                if len(batch) >= batch_size:
+                    db.bulk_save_objects(batch)
+                    db.commit()
+                    batch = []
+
+            if limit is not None and generated_count >= limit:
+                break
+
+        if batch:
+            db.bulk_save_objects(batch)
+            db.commit()
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "generated_count": generated_count,
+            "skipped_count": skipped_count,
+            "from_tf": from_tf,
+            "to_tf": to_tf,
         })
         db.commit()
 

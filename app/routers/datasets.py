@@ -8,16 +8,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe
 from app.schemas import (
     DatasetResponse, ImportRequest, WindowsRequest, LabelsTpSlRequest,
     WindowsStatsResponse, LabelsStatsResponse, JobCreatedResponse,
     ImagesRequest, ImagesStatsResponse, ImageListResponse, ImageListItem, ImageDetailResponse,
-    FeaturesRequest, FeaturesStatsResponse, InsightsResponse, FeatureRankingItem, ThresholdSuggestion
+    FeaturesRequest, FeaturesStatsResponse, InsightsResponse, FeatureRankingItem, ThresholdSuggestion,
+    ResampleRequest, TimeframeInfoItem
 )
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
-    generate_window_images_task, generate_window_features_task
+    generate_window_images_task, generate_window_features_task, resample_bars_task
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -688,3 +689,81 @@ def get_insights(dataset_id: int, db: Session = Depends(get_db)):
         feature_ranking=feature_ranking,
         threshold_suggestions=threshold_suggestions,
     )
+
+
+# ============ Resample API ============
+
+@router.post("/{dataset_id}/resample", response_model=JobCreatedResponse)
+def create_resample(
+    dataset_id: int,
+    request: ResampleRequest,
+    db: Session = Depends(get_db),
+):
+    """Resample bars from one timeframe to another (e.g. M1 -> H1)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    params = {
+        "from_tf": request.from_tf,
+        "to_tf": request.to_tf,
+        "start_ts": request.start_ts.isoformat() if request.start_ts else None,
+        "end_ts": request.end_ts.isoformat() if request.end_ts else None,
+        "limit": request.limit,
+    }
+
+    job = Job(
+        dataset_id=dataset_id,
+        job_type="resample",
+        status="pending",
+        params=json.dumps(params),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    resample_bars_task.delay(
+        job_id=job.id,
+        dataset_id=dataset_id,
+        from_tf=request.from_tf,
+        to_tf=request.to_tf,
+        start_ts=request.start_ts.isoformat() if request.start_ts else None,
+        end_ts=request.end_ts.isoformat() if request.end_ts else None,
+        limit=request.limit,
+    )
+
+    return JobCreatedResponse(job_id=job.id, message="Resample job started")
+
+
+@router.get("/{dataset_id}/timeframes", response_model=List[TimeframeInfoItem])
+def get_timeframes(dataset_id: int, db: Session = Depends(get_db)):
+    """List distinct timeframes present in this dataset with bar counts."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    rows = (
+        db.query(
+            Timeframe.name,
+            Timeframe.minutes,
+            func.count().label("bar_count"),
+            func.min(Bar.ts).label("start_ts"),
+            func.max(Bar.ts).label("end_ts"),
+        )
+        .join(Bar, Bar.timeframe_id == Timeframe.id)
+        .filter(Bar.dataset_id == dataset_id)
+        .group_by(Timeframe.id, Timeframe.name, Timeframe.minutes)
+        .order_by(Timeframe.minutes)
+        .all()
+    )
+
+    return [
+        TimeframeInfoItem(
+            name=row.name,
+            minutes=row.minutes,
+            bar_count=row.bar_count,
+            start_ts=row.start_ts,
+            end_ts=row.end_ts,
+        )
+        for row in rows
+    ]

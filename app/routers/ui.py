@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
-    generate_window_images_task, generate_window_features_task
+    generate_window_images_task, generate_window_features_task, resample_bars_task
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -188,6 +188,34 @@ def get_features_stats(dataset_id: int, db: Session):
     }
 
 
+def get_timeframe_info(dataset_id: int, db: Session):
+    """Get timeframe breakdown for a dataset."""
+    rows = (
+        db.query(
+            Timeframe.name,
+            Timeframe.minutes,
+            func.count().label("bar_count"),
+            func.min(Bar.ts).label("start_ts"),
+            func.max(Bar.ts).label("end_ts"),
+        )
+        .join(Bar, Bar.timeframe_id == Timeframe.id)
+        .filter(Bar.dataset_id == dataset_id)
+        .group_by(Timeframe.id, Timeframe.name, Timeframe.minutes)
+        .order_by(Timeframe.minutes)
+        .all()
+    )
+    return [
+        {
+            "name": row.name,
+            "minutes": row.minutes,
+            "bar_count": row.bar_count,
+            "start_ts": row.start_ts,
+            "end_ts": row.end_ts,
+        }
+        for row in rows
+    ]
+
+
 def parse_optional_datetime(value: str) -> Optional[datetime]:
     """Parse optional ISO8601 datetime string."""
     if not value or value.strip() == "":
@@ -230,6 +258,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
     labels_stats = get_labels_stats(dataset_id, db)
     images_stats = get_images_stats(dataset_id, db)
     features_stats = get_features_stats(dataset_id, db)
+    timeframes = get_timeframe_info(dataset_id, db)
 
     return templates.TemplateResponse("ui_dataset_detail.html", {
         "request": request,
@@ -238,6 +267,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "labels_stats": labels_stats,
         "images_stats": images_stats,
         "features_stats": features_stats,
+        "timeframes": timeframes,
     })
 
 
@@ -568,6 +598,71 @@ def ui_create_features(
             "labels_stats": labels_stats_data,
             "images_stats": images_stats_data,
             "features_stats": features_stats_data,
+            "error": str(e),
+        })
+
+
+@router.post("/datasets/{dataset_id}/resample")
+def ui_create_resample(
+    request: Request,
+    dataset_id: int,
+    from_tf: str = Form("M1"),
+    to_tf: str = Form("H1"),
+    limit: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create resample job."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    try:
+        limit_val = int(limit) if limit and limit.strip() else None
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+
+        params = {
+            "from_tf": from_tf,
+            "to_tf": to_tf,
+            "limit": limit_val,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="resample",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        resample_bars_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            from_tf=from_tf,
+            to_tf=to_tf,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+            limit=limit_val,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        dataset_data = get_dataset_response(dataset, db)
+        return templates.TemplateResponse("ui_dataset_detail.html", {
+            "request": request,
+            "dataset": dataset_data,
+            "windows_stats": get_windows_stats(dataset_id, db),
+            "labels_stats": get_labels_stats(dataset_id, db),
+            "images_stats": get_images_stats(dataset_id, db),
+            "features_stats": get_features_stats(dataset_id, db),
+            "timeframes": get_timeframe_info(dataset_id, db),
             "error": str(e),
         })
 
