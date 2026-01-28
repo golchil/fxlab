@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - ルール提案{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>ルール提案 ({{ "ロング" if side == "long" else "ショート" }})</h1>
+        <a href="/ui/lab?dataset_id={{ dataset.id }}" class="btn">&larr; 実験室に戻る</a>
+    </div>
+
+    {% if error %}
+    <div class="error-message">{{ error }}</div>
+    {% endif %}
+
+    <section class="info-section">
+        <h2>データ概要</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>データセット</label>
+                <span>{{ dataset.name }}</span>
+            </div>
+            <div class="info-item">
+                <label>方向</label>
+                <span>{{ "ロング" if side == "long" else "ショート" }}</span>
+            </div>
+            <div class="info-item">
+                <label>Good件数</label>
+                <span style="color: var(--success); font-weight: bold;">{{ good_count }}</span>
+            </div>
+            <div class="info-item">
+                <label>Bad件数</label>
+                <span style="color: var(--danger); font-weight: bold;">{{ bad_count }}</span>
+            </div>
+            <div class="info-item">
+                <label>ベース精度</label>
+                <span>{{ "%.1f" | format(base_precision * 100) }}%</span>
+            </div>
+        </div>
+    </section>
+
+    {% if good_count == 0 or bad_count == 0 %}
+    <div class="suggest-highlight">
+        <p>Good と Bad の両方のエントリーポイントが必要です。実験室でチャート上にエントリーを登録してください。</p>
+    </div>
+    {% endif %}
+
+    {% if feature_ranking %}
+    <section class="info-section">
+        <h2>特徴量ランキング (Cohen's d)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>特徴量</th>
+                    <th>Good 平均</th>
+                    <th>Bad 平均</th>
+                    <th>差分</th>
+                    <th>効果量 (d)</th>
+                    <th>方向</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in feature_ranking %}
+                <tr>
+                    <td>{{ feat_names.get(item.feature_name, item.feature_name) }}</td>
+                    <td>{{ item.good_mean }}</td>
+                    <td>{{ item.bad_mean }}</td>
+                    <td>{{ item.diff }}</td>
+                    <td><strong>{{ item.effect_size }}</strong></td>
+                    <td>{{ "高い方がGood" if item.direction == "higher_is_good" else "低い方がGood" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    {% if threshold_suggestions %}
+    <section class="info-section">
+        <h2>しきい値候補</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>特徴量</th>
+                    <th>演算子</th>
+                    <th>しきい値</th>
+                    <th>Good件数</th>
+                    <th>Bad件数</th>
+                    <th>精度</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in threshold_suggestions %}
+                <tr>
+                    <td>{{ feat_names.get(s.feature_name, s.feature_name) }}</td>
+                    <td><code>{{ s.operator }}</code></td>
+                    <td>{{ s.threshold }}</td>
+                    <td>{{ s.good_count }}</td>
+                    <td>{{ s.bad_count }}</td>
+                    <td><strong>{{ "%.1f" | format(s.precision * 100) }}%</strong></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section class="actions-section">
+        <h2>この条件でStrategy作成</h2>
+        <div class="forms-row">
+            <div class="form-box">
+                <form action="/ui/lab/create-strategy" method="post">
+                    <input type="hidden" name="dataset_id" value="{{ dataset.id }}">
+                    <input type="hidden" name="side" value="{{ side }}">
+                    <input type="hidden" name="rule_json" id="ruleJson" value="[]">
+
+                    <div class="form-group">
+                        <label>適用する条件</label>
+                        {% for s in threshold_suggestions %}
+                        <div style="margin-bottom: 0.5rem;">
+                            <label style="display: inline; font-weight: normal; text-transform: none; font-size: 0.95rem;">
+                                <input type="checkbox" class="rule-checkbox"
+                                    data-feature="{{ s.feature_name }}"
+                                    data-operator="{{ s.operator }}"
+                                    data-value="{{ s.threshold }}"
+                                    checked>
+                                {{ feat_names.get(s.feature_name, s.feature_name) }}
+                                <code>{{ s.operator }}</code> {{ s.threshold }}
+                                (精度: {{ "%.1f" | format(s.precision * 100) }}%)
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="session_start">セッション開始 (JST)</label>
+                        <input type="text" id="session_start" name="session_start" value="00:00">
+                    </div>
+                    <div class="form-group">
+                        <label for="session_end">セッション終了 (JST)</label>
+                        <input type="text" id="session_end" name="session_end" value="23:59">
+                    </div>
+                    <div class="form-group">
+                        <label for="tp_type">TP タイプ</label>
+                        <select id="tp_type" name="tp_type">
+                            <option value="atr">ATR</option>
+                            <option value="pips">pips</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tp_value">TP 値</label>
+                        <input type="number" id="tp_value" name="tp_value" value="1.5" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_type">SL タイプ</label>
+                        <select id="sl_type" name="sl_type">
+                            <option value="atr">ATR</option>
+                            <option value="pips">pips</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sl_value">SL 値</label>
+                        <input type="number" id="sl_value" name="sl_value" value="1.0" step="0.1">
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" onclick="buildRuleJson()">Strategy 作成</button>
+                </form>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function buildRuleJson() {
+    const checkboxes = document.querySelectorAll('.rule-checkbox:checked');
+    const rules = [];
+    checkboxes.forEach(cb => {
+        rules.push({
+            feature: cb.dataset.feature,
+            operator: cb.dataset.operator,
+            value: parseFloat(cb.dataset.value),
+        });
+    });
+    document.getElementById('ruleJson').value = JSON.stringify(rules);
+}
+</script>
+{% endblock %}

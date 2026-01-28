@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - エントリーポイント一覧{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>エントリーポイント一覧</h1>
+        <a href="/ui/lab{% if selected_dataset_id %}?dataset_id={{ selected_dataset_id }}{% endif %}" class="btn">&larr; 実験室に戻る</a>
+    </div>
+
+    <form method="get" action="/ui/lab/entries" class="lab-selector">
+        <div class="form-group">
+            <label for="dataset_id">データセット</label>
+            <select id="dataset_id" name="dataset_id" required>
+                <option value="">選択...</option>
+                {% for ds in datasets %}
+                <option value="{{ ds.id }}" {{ "selected" if ds.id == selected_dataset_id }}>{{ ds.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="side">方向</label>
+            <select id="side" name="side">
+                <option value="">全て</option>
+                <option value="long" {{ "selected" if selected_side == "long" }}>Long</option>
+                <option value="short" {{ "selected" if selected_side == "short" }}>Short</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="label">ラベル</label>
+            <select id="label" name="label">
+                <option value="">全て</option>
+                <option value="good" {{ "selected" if selected_label == "good" }}>Good</option>
+                <option value="bad" {{ "selected" if selected_label == "bad" }}>Bad</option>
+                <option value="unknown" {{ "selected" if selected_label == "unknown" }}>不明</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">フィルタ</button>
+    </form>
+
+    {% if entries %}
+    <section class="info-section">
+        <h2>{{ entries | length }} 件</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>時刻</th>
+                    <th>方向</th>
+                    <th>ラベル</th>
+                    <th>メモ</th>
+                    <th>登録日</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ep in entries %}
+                <tr id="row-{{ ep.id }}">
+                    <td>{{ ep.id }}</td>
+                    <td>{{ ep.ts.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>
+                        {% if ep.side == "long" %}
+                        <span style="color: var(--success); font-weight: 500;">Long</span>
+                        {% else %}
+                        <span style="color: var(--danger); font-weight: 500;">Short</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if ep.label == "good" %}
+                        <span class="label-badge label-tp_hit">Good</span>
+                        {% elif ep.label == "bad" %}
+                        <span class="label-badge label-sl_hit">Bad</span>
+                        {% else %}
+                        <span class="label-badge label-neither">不明</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ ep.note or "-" }}</td>
+                    <td>{{ ep.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>
+                        <button class="btn-icon" onclick="deleteEntry({{ ep.id }})" title="削除">&#x2715;</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% elif selected_dataset_id %}
+    <p class="empty-state">エントリーポイントがありません。</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function deleteEntry(id) {
+    if (!confirm('このエントリーポイントを削除しますか？')) return;
+    fetch(`/ui/lab/entries/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                document.getElementById(`row-${id}`).remove();
+            } else {
+                alert('Error: ' + (data.error || 'Unknown'));
+            }
+        })
+        .catch(err => alert('Error: ' + err));
+}
+</script>
+{% endblock %}

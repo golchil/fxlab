@@ -2,14 +2,14 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Request, Depends, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, Body
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
@@ -1356,3 +1356,502 @@ def ui_job_detail(request: Request, job_id: int, db: Session = Depends(get_db)):
         "request": request,
         "job": job,
     })
+
+
+# === Lab Routes ===
+
+@router.get("/lab", response_class=HTMLResponse)
+def ui_lab(
+    request: Request,
+    dataset_id: Optional[int] = None,
+    timeframe: str = "M1",
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Lab main page with interactive chart."""
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
+    timeframes = db.query(Timeframe).order_by(Timeframe.minutes).all()
+
+    # Resolve instrument_id from dataset's bars
+    instrument_id = None
+    entry_points = []
+    if dataset_id:
+        first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+        if first_bar:
+            instrument_id = first_bar[0]
+
+        tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
+        if tf and instrument_id:
+            ep_query = db.query(EntryPoint).filter(
+                EntryPoint.dataset_id == dataset_id,
+                EntryPoint.instrument_id == instrument_id,
+                EntryPoint.timeframe_id == tf.id,
+            ).order_by(EntryPoint.ts)
+            entry_points = ep_query.all()
+
+    return templates.TemplateResponse("ui_lab.html", {
+        "request": request,
+        "datasets": dataset_list,
+        "timeframes": timeframes,
+        "selected_dataset_id": dataset_id,
+        "selected_timeframe": timeframe,
+        "start_ts": start_ts or "",
+        "end_ts": end_ts or "",
+        "instrument_id": instrument_id,
+        "entry_points": entry_points,
+    })
+
+
+@router.get("/lab/bars")
+def ui_lab_bars(
+    dataset_id: int,
+    timeframe: str = "M1",
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """JSON API: bar data + MAs for chart."""
+    tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
+    if not tf:
+        return JSONResponse({"error": f"Timeframe {timeframe} not found"}, status_code=404)
+
+    first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+    if not first_bar:
+        return JSONResponse({"error": "No bars in dataset"}, status_code=404)
+    instrument_id = first_bar[0]
+
+    query = db.query(Bar).filter(
+        Bar.dataset_id == dataset_id,
+        Bar.instrument_id == instrument_id,
+        Bar.timeframe_id == tf.id,
+    )
+    if start_ts:
+        query = query.filter(Bar.ts >= parse_optional_datetime(start_ts))
+    if end_ts:
+        query = query.filter(Bar.ts <= parse_optional_datetime(end_ts))
+
+    bars = query.order_by(Bar.ts).limit(3000).all()
+
+    if not bars:
+        return JSONResponse({"bars": [], "ma5": [], "ma20": [], "ma60": []})
+
+    closes = [b.close for b in bars]
+
+    def compute_ma(values, period):
+        result = []
+        for i in range(len(values)):
+            if i < period - 1:
+                result.append(None)
+            else:
+                result.append(sum(values[i - period + 1:i + 1]) / period)
+        return result
+
+    ma5 = compute_ma(closes, 5)
+    ma20 = compute_ma(closes, 20)
+    ma60 = compute_ma(closes, 60)
+
+    bar_data = []
+    ma5_data = []
+    ma20_data = []
+    ma60_data = []
+
+    for i, b in enumerate(bars):
+        ts_str = b.ts.strftime("%Y-%m-%d") if tf.minutes >= 1440 else b.ts.strftime("%Y-%m-%dT%H:%M:%S")
+        bar_data.append({
+            "time": ts_str,
+            "open": b.open,
+            "high": b.high,
+            "low": b.low,
+            "close": b.close,
+        })
+        if ma5[i] is not None:
+            ma5_data.append({"time": ts_str, "value": ma5[i]})
+        if ma20[i] is not None:
+            ma20_data.append({"time": ts_str, "value": ma20[i]})
+        if ma60[i] is not None:
+            ma60_data.append({"time": ts_str, "value": ma60[i]})
+
+    return JSONResponse({
+        "bars": bar_data,
+        "ma5": ma5_data,
+        "ma20": ma20_data,
+        "ma60": ma60_data,
+        "instrument_id": instrument_id,
+        "timeframe_id": tf.id,
+    })
+
+
+@router.post("/lab/entries")
+def ui_lab_create_entry(
+    request: Request,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """AJAX: Create or update entry point."""
+    dataset_id = data["dataset_id"]
+    instrument_id = data["instrument_id"]
+    timeframe_id = data["timeframe_id"]
+    ts_str = data["ts"]
+    side = data["side"]
+    label = data.get("label", "unknown")
+    note = data.get("note")
+
+    ts = parse_optional_datetime(ts_str)
+
+    # Upsert: check existing
+    existing = db.query(EntryPoint).filter(
+        EntryPoint.dataset_id == dataset_id,
+        EntryPoint.instrument_id == instrument_id,
+        EntryPoint.timeframe_id == timeframe_id,
+        EntryPoint.ts == ts,
+        EntryPoint.side == side,
+    ).first()
+
+    if existing:
+        existing.label = label
+        if note is not None:
+            existing.note = note
+        db.commit()
+        db.refresh(existing)
+        return JSONResponse({"id": existing.id, "action": "updated"})
+
+    ep = EntryPoint(
+        dataset_id=dataset_id,
+        instrument_id=instrument_id,
+        timeframe_id=timeframe_id,
+        ts=ts,
+        side=side,
+        label=label,
+        note=note,
+    )
+    db.add(ep)
+    db.commit()
+    db.refresh(ep)
+    return JSONResponse({"id": ep.id, "action": "created"})
+
+
+@router.delete("/lab/entries/{entry_id}")
+def ui_lab_delete_entry(entry_id: int, db: Session = Depends(get_db)):
+    """AJAX: Delete entry point."""
+    ep = db.query(EntryPoint).filter(EntryPoint.id == entry_id).first()
+    if not ep:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    db.delete(ep)
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
+@router.get("/lab/entries", response_class=HTMLResponse)
+def ui_lab_entries(
+    request: Request,
+    dataset_id: Optional[int] = None,
+    side: Optional[str] = None,
+    label: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Entry points list page."""
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
+
+    entries = []
+    if dataset_id:
+        query = db.query(EntryPoint).filter(EntryPoint.dataset_id == dataset_id)
+        if side:
+            query = query.filter(EntryPoint.side == side)
+        if label:
+            query = query.filter(EntryPoint.label == label)
+        entries = query.order_by(EntryPoint.ts).all()
+
+    return templates.TemplateResponse("ui_lab_entries.html", {
+        "request": request,
+        "datasets": dataset_list,
+        "entries": entries,
+        "selected_dataset_id": dataset_id,
+        "selected_side": side or "",
+        "selected_label": label or "",
+    })
+
+
+@router.get("/lab/suggest-rules", response_class=HTMLResponse)
+def ui_lab_suggest_rules(
+    request: Request,
+    dataset_id: int,
+    side: str = "long",
+    db: Session = Depends(get_db),
+):
+    """Rule suggestion based on good vs bad entry points."""
+    import math
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/lab", status_code=303)
+
+    # Get good/bad entries
+    good_entries = db.query(EntryPoint).filter(
+        EntryPoint.dataset_id == dataset_id,
+        EntryPoint.side == side,
+        EntryPoint.label == "good",
+    ).all()
+
+    bad_entries = db.query(EntryPoint).filter(
+        EntryPoint.dataset_id == dataset_id,
+        EntryPoint.side == side,
+        EntryPoint.label == "bad",
+    ).all()
+
+    feature_names = [
+        "sma5_slope_5", "sma20_slope_5", "sma20_slope_20", "sma60_slope_20",
+        "close_to_sma20", "spread_5_20", "spread_20_60", "atr14", "vol_mean",
+    ]
+
+    # Compute features for each entry via on-the-fly
+    first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+    if not first_bar:
+        return templates.TemplateResponse("ui_lab_suggest.html", {
+            "request": request,
+            "dataset": {"id": dataset_id, "name": dataset.name},
+            "side": side,
+            "good_count": 0,
+            "bad_count": 0,
+            "feature_ranking": [],
+            "threshold_suggestions": [],
+            "feat_names": FEATURE_DISPLAY_NAMES,
+            "error": "No bars in dataset",
+        })
+
+    instrument_id = first_bar[0]
+
+    def get_features_for_entries(entries):
+        """Compute on-the-fly features for entry timestamps."""
+        results = []
+        for ep in entries:
+            tf = db.query(Timeframe).filter(Timeframe.id == ep.timeframe_id).first()
+            if not tf:
+                continue
+
+            # Load bars around this timestamp for feature computation
+            LOOKBACK = 128
+            bars = (
+                db.query(Bar)
+                .filter(
+                    Bar.dataset_id == dataset_id,
+                    Bar.instrument_id == instrument_id,
+                    Bar.timeframe_id == tf.id,
+                    Bar.ts <= ep.ts,
+                )
+                .order_by(Bar.ts.desc())
+                .limit(LOOKBACK)
+                .all()
+            )
+            bars.reverse()
+
+            if len(bars) < LOOKBACK:
+                continue
+
+            closes = [b.close for b in bars]
+            highs = [b.high for b in bars]
+            lows = [b.low for b in bars]
+
+            # Compute features (same as tasks.py compute_features_onthefly)
+            idx = len(closes) - 1
+
+            def sma(arr, period, at):
+                return sum(arr[at - period + 1:at + 1]) / period
+
+            sma5 = sma(closes, 5, idx)
+            sma20 = sma(closes, 20, idx)
+            sma60 = sma(closes, 60, idx)
+            sma5_prev5 = sma(closes, 5, idx - 5)
+            sma20_prev5 = sma(closes, 20, idx - 5)
+            sma20_prev20 = sma(closes, 20, idx - 20)
+            sma60_prev20 = sma(closes, 60, idx - 20)
+
+            # ATR14
+            trs = []
+            for j in range(idx - 13, idx + 1):
+                tr = max(
+                    highs[j] - lows[j],
+                    abs(highs[j] - closes[j - 1]),
+                    abs(lows[j] - closes[j - 1]),
+                )
+                trs.append(tr)
+            atr14 = sum(trs) / 14
+            if atr14 < 1e-10:
+                continue
+
+            feats = {
+                "sma5_slope_5": (sma5 - sma5_prev5) / atr14,
+                "sma20_slope_5": (sma20 - sma20_prev5) / atr14,
+                "sma20_slope_20": (sma20 - sma20_prev20) / atr14,
+                "sma60_slope_20": (sma60 - sma60_prev20) / atr14,
+                "close_to_sma20": (closes[idx] - sma20) / atr14,
+                "spread_5_20": (sma5 - sma20) / atr14,
+                "spread_20_60": (sma20 - sma60) / atr14,
+                "atr14": atr14,
+                "vol_mean": sum(b.volume for b in bars[-20:]) / 20,
+            }
+            results.append(feats)
+        return results
+
+    good_features = get_features_for_entries(good_entries)
+    bad_features = get_features_for_entries(bad_entries)
+
+    good_count = len(good_features)
+    bad_count = len(bad_features)
+
+    # Cohen's d ranking
+    feature_ranking = []
+    good_by_feat = {n: [f[n] for f in good_features] for n in feature_names}
+    bad_by_feat = {n: [f[n] for f in bad_features] for n in feature_names}
+
+    for name in feature_names:
+        gv = good_by_feat[name]
+        bv = bad_by_feat[name]
+        if not gv or not bv:
+            continue
+
+        g_mean = sum(gv) / len(gv)
+        b_mean = sum(bv) / len(bv)
+        diff = g_mean - b_mean
+
+        g_var = sum((v - g_mean) ** 2 for v in gv) / len(gv) if len(gv) > 1 else 0
+        b_var = sum((v - b_mean) ** 2 for v in bv) / len(bv) if len(bv) > 1 else 0
+        pooled_std = math.sqrt((g_var + b_var) / 2) if (g_var + b_var) > 0 else 1e-10
+        effect_size = abs(diff) / pooled_std
+
+        direction = "higher_is_good" if diff > 0 else "lower_is_good"
+
+        feature_ranking.append({
+            "feature_name": name,
+            "good_mean": round(g_mean, 6),
+            "bad_mean": round(b_mean, 6),
+            "diff": round(diff, 6),
+            "effect_size": round(effect_size, 4),
+            "direction": direction,
+        })
+
+    feature_ranking.sort(key=lambda x: x["effect_size"], reverse=True)
+
+    # Threshold suggestions
+    threshold_suggestions = []
+    base_precision = good_count / (good_count + bad_count) if (good_count + bad_count) > 0 else 0
+
+    for item in feature_ranking[:5]:
+        name = item["feature_name"]
+        all_good = good_by_feat[name]
+        all_bad = bad_by_feat[name]
+
+        if item["direction"] == "higher_is_good":
+            all_vals = sorted(all_good + all_bad)
+            for pct in [0.5, 0.6, 0.7]:
+                idx = int(len(all_vals) * pct)
+                threshold = all_vals[min(idx, len(all_vals) - 1)]
+                g_above = sum(1 for v in all_good if v > threshold)
+                b_above = sum(1 for v in all_bad if v > threshold)
+                total_above = g_above + b_above
+                if total_above > 0:
+                    precision = g_above / total_above
+                    if precision > base_precision:
+                        threshold_suggestions.append({
+                            "feature_name": name,
+                            "operator": ">",
+                            "threshold": round(threshold, 6),
+                            "good_count": g_above,
+                            "bad_count": b_above,
+                            "precision": round(precision, 4),
+                        })
+                        break
+        else:
+            all_vals = sorted(all_good + all_bad)
+            for pct in [0.5, 0.4, 0.3]:
+                idx = int(len(all_vals) * pct)
+                threshold = all_vals[min(idx, len(all_vals) - 1)]
+                g_below = sum(1 for v in all_good if v < threshold)
+                b_below = sum(1 for v in all_bad if v < threshold)
+                total_below = g_below + b_below
+                if total_below > 0:
+                    precision = g_below / total_below
+                    if precision > base_precision:
+                        threshold_suggestions.append({
+                            "feature_name": name,
+                            "operator": "<",
+                            "threshold": round(threshold, 6),
+                            "good_count": g_below,
+                            "bad_count": b_below,
+                            "precision": round(precision, 4),
+                        })
+                        break
+
+    return templates.TemplateResponse("ui_lab_suggest.html", {
+        "request": request,
+        "dataset": {"id": dataset_id, "name": dataset.name},
+        "side": side,
+        "good_count": good_count,
+        "bad_count": bad_count,
+        "base_precision": round(base_precision, 4),
+        "feature_ranking": feature_ranking,
+        "threshold_suggestions": threshold_suggestions,
+        "feat_names": FEATURE_DISPLAY_NAMES,
+    })
+
+
+@router.post("/lab/create-strategy")
+def ui_lab_create_strategy(
+    request: Request,
+    dataset_id: int = Form(...),
+    side: str = Form("long"),
+    rule_json: str = Form("[]"),
+    session_start: str = Form("00:00"),
+    session_end: str = Form("23:59"),
+    tp_type: str = Form("atr"),
+    tp_value: float = Form(1.5),
+    sl_type: str = Form("atr"),
+    sl_value: float = Form(1.0),
+    db: Session = Depends(get_db),
+):
+    """Create strategy from Lab suggestion."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/lab", status_code=303)
+
+    first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+    if not first_bar:
+        return RedirectResponse(url="/ui/lab", status_code=303)
+    instrument_id = first_bar[0]
+
+    # Use M1 timeframe for the strategy
+    tf = db.query(Timeframe).filter(Timeframe.name == "M1").first()
+    if not tf:
+        return RedirectResponse(url="/ui/lab", status_code=303)
+
+    # Generate name
+    rules = json.loads(rule_json)
+    rule_desc = ", ".join(f"{r['feature']} {r['operator']} {r['value']}" for r in rules[:2])
+    name = f"Lab-{side}-{rule_desc}" if rule_desc else f"Lab-{side}"
+
+    strategy = Strategy(
+        name=name[:255],
+        dataset_id=dataset_id,
+        instrument_id=instrument_id,
+        timeframe_id=tf.id,
+        side=side,
+        session_start=session_start,
+        session_end=session_end,
+        weekdays="0,1,2,3,4",
+        entry_timing="close",
+        rule_json=rule_json,
+        tp_type=tp_type,
+        tp_value=tp_value,
+        sl_type=sl_type,
+        sl_value=sl_value,
+        max_hold_bars=100,
+        cooldown_bars=0,
+        fee_pips=0.0,
+        created_at=datetime.utcnow(),
+    )
+    db.add(strategy)
+    db.commit()
+    db.refresh(strategy)
+    return RedirectResponse(url=f"/ui/strategies/{strategy.id}", status_code=303)

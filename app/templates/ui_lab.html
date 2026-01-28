@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - 実験室{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>実験室</h1>
+
+    <form method="get" action="/ui/lab" class="lab-selector">
+        <div class="form-group">
+            <label for="dataset_id">データセット</label>
+            <select id="dataset_id" name="dataset_id" required>
+                <option value="">選択...</option>
+                {% for ds in datasets %}
+                <option value="{{ ds.id }}" {{ "selected" if ds.id == selected_dataset_id }}>{{ ds.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="timeframe">時間足</label>
+            <select id="timeframe" name="timeframe">
+                {% for tf in timeframes %}
+                <option value="{{ tf.name }}" {{ "selected" if tf.name == selected_timeframe }}>{{ tf.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="start_ts">開始</label>
+            <input type="text" id="start_ts" name="start_ts" value="{{ start_ts }}" placeholder="2003-06-01T00:00:00Z">
+        </div>
+        <div class="form-group">
+            <label for="end_ts">終了</label>
+            <input type="text" id="end_ts" name="end_ts" value="{{ end_ts }}" placeholder="2024-01-01T00:00:00Z">
+        </div>
+        <button type="submit" class="btn btn-primary">表示</button>
+    </form>
+
+    {% if selected_dataset_id %}
+    <div class="lab-chart-container">
+        <div id="chart"></div>
+        <p style="margin-top: 0.5rem; color: var(--gray-500); font-size: 0.85rem;">
+            チャート上でクリック → エントリーポイントを登録
+        </p>
+    </div>
+
+    <div class="header-row">
+        <div>
+            <a href="/ui/lab/entries?dataset_id={{ selected_dataset_id }}" class="btn">エントリー一覧</a>
+            <a href="/ui/lab/suggest-rules?dataset_id={{ selected_dataset_id }}&side=long" class="btn">ルール提案 (Long)</a>
+            <a href="/ui/lab/suggest-rules?dataset_id={{ selected_dataset_id }}&side=short" class="btn">ルール提案 (Short)</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Entry Point Registration Panel -->
+<div class="entry-overlay" id="entryOverlay"></div>
+<div class="entry-panel" id="entryPanel">
+    <h3>エントリーポイント登録</h3>
+    <p id="entryPanelTs" style="margin-bottom: 0.5rem; font-weight: 500;"></p>
+    <p id="entryPanelPrice" style="margin-bottom: 1rem; color: var(--gray-500);"></p>
+
+    <div class="form-group">
+        <label>方向</label>
+        <div class="panel-buttons" style="margin-bottom: 0.75rem;">
+            <button class="btn btn-long" onclick="selectSide('long')">Long</button>
+            <button class="btn btn-short" onclick="selectSide('short')">Short</button>
+        </div>
+    </div>
+
+    <div class="form-group" id="labelGroup" style="display: none;">
+        <label>ラベル</label>
+        <div class="panel-buttons">
+            <button class="btn btn-good" onclick="registerEntry('good')">Good</button>
+            <button class="btn btn-bad" onclick="registerEntry('bad')">Bad</button>
+            <button class="btn btn-unknown" onclick="registerEntry('unknown')">不明</button>
+        </div>
+    </div>
+
+    <div style="margin-top: 1rem;">
+        <button class="btn" onclick="closePanel()">キャンセル</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if selected_dataset_id %}
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function() {
+    const datasetId = {{ selected_dataset_id }};
+    const timeframe = "{{ selected_timeframe }}";
+    const startTs = "{{ start_ts }}";
+    const endTs = "{{ end_ts }}";
+
+    // Existing entry points from server
+    const existingEntries = [
+        {% for ep in entry_points %}
+        {
+            id: {{ ep.id }},
+            ts: "{{ ep.ts.strftime('%Y-%m-%dT%H:%M:%S') }}",
+            side: "{{ ep.side }}",
+            label: "{{ ep.label }}",
+        },
+        {% endfor %}
+    ];
+
+    let instrumentId = null;
+    let timeframeId = null;
+    let selectedSide = null;
+    let clickedTime = null;
+    let clickedPrice = null;
+    let chart = null;
+    let candleSeries = null;
+
+    // Create chart
+    const container = document.getElementById('chart');
+    chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 500,
+        layout: {
+            background: { type: 'solid', color: '#ffffff' },
+            textColor: '#333',
+        },
+        grid: {
+            vertLines: { color: '#f0f0f0' },
+            horzLines: { color: '#f0f0f0' },
+        },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+        },
+    });
+
+    candleSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a',
+        downColor: '#ef5350',
+        borderVisible: false,
+        wickUpColor: '#26a69a',
+        wickDownColor: '#ef5350',
+    });
+
+    const ma5Series = chart.addLineSeries({ color: '#ffd700', lineWidth: 1, title: 'MA5' });
+    const ma20Series = chart.addLineSeries({ color: '#2196f3', lineWidth: 1, title: 'MA20' });
+    const ma60Series = chart.addLineSeries({ color: '#f44336', lineWidth: 1, title: 'MA60' });
+
+    // Load bars
+    let params = `dataset_id=${datasetId}&timeframe=${timeframe}`;
+    if (startTs) params += `&start_ts=${encodeURIComponent(startTs)}`;
+    if (endTs) params += `&end_ts=${encodeURIComponent(endTs)}`;
+
+    fetch(`/ui/lab/bars?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                container.innerHTML = `<p style="color:red">${data.error}</p>`;
+                return;
+            }
+            instrumentId = data.instrument_id;
+            timeframeId = data.timeframe_id;
+
+            // Parse time strings to timestamps for lightweight-charts
+            function parseTime(t) {
+                return t;  // lightweight-charts v4 accepts ISO strings
+            }
+
+            candleSeries.setData(data.bars);
+            ma5Series.setData(data.ma5);
+            ma20Series.setData(data.ma20);
+            ma60Series.setData(data.ma60);
+
+            chart.timeScale().fitContent();
+
+            // Add markers for existing entries
+            addEntryMarkers();
+        })
+        .catch(err => {
+            container.innerHTML = `<p style="color:red">Error: ${err}</p>`;
+        });
+
+    function addEntryMarkers() {
+        const markers = existingEntries.map(ep => {
+            const isLong = ep.side === 'long';
+            let color = '#888';
+            if (ep.label === 'good') color = '#26a69a';
+            else if (ep.label === 'bad') color = '#ef5350';
+
+            return {
+                time: ep.ts,
+                position: isLong ? 'belowBar' : 'aboveBar',
+                color: color,
+                shape: isLong ? 'arrowUp' : 'arrowDown',
+                text: `${isLong ? 'L' : 'S'}(${ep.label})`,
+            };
+        });
+        markers.sort((a, b) => a.time < b.time ? -1 : 1);
+        candleSeries.setMarkers(markers);
+    }
+
+    // Chart click handler
+    chart.subscribeClick(param => {
+        if (!param.time || !instrumentId) return;
+
+        // Get the OHLC data at clicked time
+        const barData = param.seriesData.get(candleSeries);
+        clickedPrice = barData ? barData.close : null;
+
+        // Format time for display and API
+        clickedTime = param.time;
+
+        // Display panel
+        const panel = document.getElementById('entryPanel');
+        const overlay = document.getElementById('entryOverlay');
+        document.getElementById('entryPanelTs').textContent = `時刻: ${typeof param.time === 'string' ? param.time : new Date(param.time * 1000).toISOString()}`;
+        document.getElementById('entryPanelPrice').textContent = clickedPrice ? `価格: ${clickedPrice.toFixed(5)}` : '';
+        panel.classList.add('active');
+        overlay.classList.add('active');
+
+        selectedSide = null;
+        document.getElementById('labelGroup').style.display = 'none';
+    });
+
+    window.selectSide = function(side) {
+        selectedSide = side;
+        document.getElementById('labelGroup').style.display = 'block';
+    };
+
+    window.registerEntry = function(label) {
+        if (!clickedTime || !selectedSide || !instrumentId) return;
+
+        // Convert time to ISO string
+        let tsStr;
+        if (typeof clickedTime === 'string') {
+            // Already a string from lightweight-charts
+            if (clickedTime.includes('T')) {
+                tsStr = clickedTime + 'Z';
+            } else {
+                tsStr = clickedTime + 'T00:00:00Z';
+            }
+        } else {
+            tsStr = new Date(clickedTime * 1000).toISOString();
+        }
+
+        fetch('/ui/lab/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                dataset_id: datasetId,
+                instrument_id: instrumentId,
+                timeframe_id: timeframeId,
+                ts: tsStr,
+                side: selectedSide,
+                label: label,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                alert('Error: ' + data.error);
+                return;
+            }
+            // Add to local entries and update markers
+            existingEntries.push({
+                id: data.id,
+                ts: typeof clickedTime === 'string' ? clickedTime : new Date(clickedTime * 1000).toISOString().replace('Z', ''),
+                side: selectedSide,
+                label: label,
+            });
+            addEntryMarkers();
+            closePanel();
+        })
+        .catch(err => alert('Error: ' + err));
+    };
+
+    window.closePanel = function() {
+        document.getElementById('entryPanel').classList.remove('active');
+        document.getElementById('entryOverlay').classList.remove('active');
+        selectedSide = null;
+    };
+
+    document.getElementById('entryOverlay').addEventListener('click', closePanel);
+
+    // Resize
+    window.addEventListener('resize', () => {
+        chart.applyOptions({ width: container.clientWidth });
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

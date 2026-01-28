@@ -26,6 +26,7 @@ class Dataset(Base):
     window_features: Mapped[list["WindowFeature"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     strategies: Mapped[list["Strategy"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     signals: Mapped[list["Signal"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    entry_points: Mapped[list["EntryPoint"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -278,4 +279,25 @@ class Trade(Base):
 
     __table_args__ = (
         Index("ix_trades_run", "run_id"),
+    )
+
+
+class EntryPoint(Base):
+    __tablename__ = "entry_points"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    side: Mapped[str] = mapped_column(Text)  # "long" / "short"
+    label: Mapped[str] = mapped_column(Text, default="unknown")  # "good" / "bad" / "unknown"
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship(back_populates="entry_points")
+
+    __table_args__ = (
+        Index("ix_entry_points_dataset", "dataset_id", "instrument_id", "timeframe_id"),
+        UniqueConstraint("dataset_id", "instrument_id", "timeframe_id", "ts", "side", name="uq_entry_points_ts"),
     )
