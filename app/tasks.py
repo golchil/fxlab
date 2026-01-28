@@ -1017,12 +1017,17 @@ def backtest_task(
         bars = query.order_by(Bar.ts).all()
 
         if not bars:
+            diag = {
+                "total_trades": 0, "message": "No bars found",
+                "bars_in_range": 0, "bars_in_session": 0, "bars_htf_ok": 0,
+                "bars_feature_missing": 0, "bars_rule_true": 0, "entries": 0,
+            }
             run.status = "completed"
-            run.result_json = json.dumps({"total_trades": 0, "message": "No bars found"})
+            run.result_json = json.dumps(diag)
             job.status = "completed"
-            job.result = json.dumps({"total_trades": 0})
+            job.result = json.dumps(diag)
             db.commit()
-            return {"total_trades": 0}
+            return diag
 
         # Build feature lookup: window.end_ts -> WindowFeature dict
         windows_with_features = (
@@ -1048,13 +1053,91 @@ def backtest_task(
             naive_utc = window.end_ts.replace(tzinfo=None) if window.end_ts.tzinfo else window.end_ts
             feature_map_naive[naive_utc] = feat_dict
 
-        def get_features_for_bar(bar):
+        # On-the-fly feature calculation when window_features missing
+        # Pre-build closes array indexed by bar position for O(1) SMA lookback
+        closes_array = [b.close for b in bars]
+        highs_array = [b.high for b in bars]
+        lows_array = [b.low for b in bars]
+
+        def compute_features_onthefly(bar_idx):
+            """Compute minimal features from raw bar history (lookback_n=128)."""
+            LOOKBACK = 128
+            if bar_idx < LOOKBACK - 1:
+                return None
+
+            start = bar_idx - LOOKBACK + 1
+            window_closes = closes_array[start:bar_idx + 1]
+            window_highs = highs_array[start:bar_idx + 1]
+            window_lows = lows_array[start:bar_idx + 1]
+            n = len(window_closes)
+            current_close = window_closes[-1]
+
+            # SMA20
+            if n < 20:
+                return None
+            sma20 = sum(window_closes[-20:]) / 20
+
+            # close_to_sma20: ATR-normalized distance
+            # ATR14
+            if n < 15:
+                return None
+            tr_list = []
+            for j in range(n - 14, n):
+                high_low = window_highs[j] - window_lows[j]
+                high_prev = abs(window_highs[j] - window_closes[j - 1])
+                low_prev = abs(window_lows[j] - window_closes[j - 1])
+                tr_list.append(max(high_low, high_prev, low_prev))
+            atr14 = sum(tr_list) / 14
+
+            close_to_sma20 = (current_close - sma20) / atr14 if atr14 > 0 else 0.0
+
+            # sma20_slope_20: (sma20_now - sma20_20bars_ago) / atr14
+            if n < 40:
+                return None
+            sma20_ago = sum(window_closes[-40:-20]) / 20
+            sma20_slope_20 = (sma20 - sma20_ago) / atr14 if atr14 > 0 else 0.0
+
+            # SMA5
+            sma5 = sum(window_closes[-5:]) / 5
+            sma5_5ago = sum(window_closes[-10:-5]) / 5 if n >= 10 else sma5
+            sma5_slope_5 = (sma5 - sma5_5ago) / atr14 if atr14 > 0 else 0.0
+
+            # sma20_slope_5
+            sma20_5ago = sum(window_closes[-25:-5]) / 20 if n >= 25 else sma20
+            sma20_slope_5 = (sma20 - sma20_5ago) / atr14 if atr14 > 0 else 0.0
+
+            # SMA60
+            sma60 = sum(window_closes[-60:]) / 60 if n >= 60 else None
+            sma60_slope_20 = 0.0
+            if sma60 is not None and n >= 80:
+                sma60_20ago = sum(window_closes[-80:-60]) / 60 if n >= 80 else sma60
+                sma60_slope_20 = (sma60 - sma60_20ago) / atr14 if atr14 > 0 else 0.0
+
+            spread_5_20 = (sma5 - sma20) / atr14 if atr14 > 0 else 0.0
+            spread_20_60 = (sma20 - sma60) / atr14 if atr14 > 0 and sma60 is not None else 0.0
+
+            vol_mean = sum(bars[start + j].volume for j in range(n)) / n if n > 0 else 0.0
+
+            return {
+                "sma5_slope_5": sma5_slope_5,
+                "sma20_slope_5": sma20_slope_5,
+                "sma20_slope_20": sma20_slope_20,
+                "sma60_slope_20": sma60_slope_20,
+                "close_to_sma20": close_to_sma20,
+                "spread_5_20": spread_5_20,
+                "spread_20_60": spread_20_60,
+                "atr14": atr14,
+                "vol_mean": vol_mean,
+            }
+
+        def get_features_for_bar(bar, bar_idx):
+            """Try DB features first, fall back to on-the-fly calculation."""
             if bar.ts in feature_map:
                 return feature_map[bar.ts]
             ts_naive = bar.ts.replace(tzinfo=None) if bar.ts.tzinfo else bar.ts
             if ts_naive in feature_map_naive:
                 return feature_map_naive[ts_naive]
-            return None
+            return compute_features_onthefly(bar_idx)
 
         def is_in_session(bar_ts):
             if bar_ts.tzinfo is None:
@@ -1090,10 +1173,17 @@ def backtest_task(
         sample_close = bars[0].close
         pip_size = 0.01 if sample_close > 50 else 0.0001
 
-        # Walk bars
+        # Walk bars with diagnostic counters
         trades_list = []
         position = None
         cooldown_remaining = 0
+
+        cnt_bars_in_range = len(bars)
+        cnt_bars_in_session = 0
+        cnt_bars_htf_ok = 0
+        cnt_bars_feature_missing = 0
+        cnt_bars_rule_true = 0
+        cnt_entries = 0
 
         for i, bar in enumerate(bars):
             if position is not None:
@@ -1166,20 +1256,24 @@ def backtest_task(
 
                 if not is_in_session(bar.ts):
                     continue
+                cnt_bars_in_session += 1
 
-                features = get_features_for_bar(bar)
-                if features is None:
-                    continue
-
-                if not evaluate_rules(features, rules):
-                    continue
-
-                # HTF signal check
+                # HTF signal check (before feature calc for efficiency)
                 current_signal_ts = None
                 if htf_enabled:
                     current_signal_ts = find_latest_htf_signal(bar.ts)
                     if current_signal_ts is None:
                         continue
+                cnt_bars_htf_ok += 1
+
+                features = get_features_for_bar(bar, i)
+                if features is None:
+                    cnt_bars_feature_missing += 1
+                    continue
+
+                if not evaluate_rules(features, rules):
+                    continue
+                cnt_bars_rule_true += 1
 
                 atr14 = features.get("atr14", 0)
                 side = strategy.side
@@ -1221,6 +1315,7 @@ def backtest_task(
                     "atr14": atr14,
                     "signal_ts": current_signal_ts,
                 }
+                cnt_entries += 1
 
         # Close open position at end of data
         if position is not None:
@@ -1347,6 +1442,29 @@ def backtest_task(
                 "expectancy_pips_per_trade": 0, "expectancy_total_pips": 0,
                 "expectancy_r_per_trade": 0,
             }
+
+        # Diagnostic counters
+        result_summary["bars_in_range"] = cnt_bars_in_range
+        result_summary["bars_in_session"] = cnt_bars_in_session
+        result_summary["bars_htf_ok"] = cnt_bars_htf_ok
+        result_summary["bars_feature_missing"] = cnt_bars_feature_missing
+        result_summary["bars_rule_true"] = cnt_bars_rule_true
+        result_summary["entries"] = cnt_entries
+        result_summary["db_features_count"] = len(feature_map)
+
+        # HTF diagnostic
+        if htf_enabled:
+            result_summary["htf_signals_total"] = len(htf_signals)
+            # Count signals within the run period
+            htf_in_range = 0
+            htf_bars_within_lookback = 0
+            run_start = bars[0].ts
+            run_end = bars[-1].ts
+            for sig_ts in htf_signals:
+                if run_start <= sig_ts <= run_end:
+                    htf_in_range += 1
+            # bars_htf_ok already counted above
+            result_summary["htf_signals_in_range"] = htf_in_range
 
         run.status = "completed"
         run.result_json = json.dumps(result_summary)

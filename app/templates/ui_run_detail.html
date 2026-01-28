@@ -115,6 +115,38 @@
             {% endif %}
         </div>
     </section>
+
+    {% if result.get('bars_in_range') is not none %}
+    <section class="stats-section">
+        <h2>診断カウンタ</h2>
+        <div class="stats-row">
+            <div class="stat-box">
+                <h3>バー走査</h3>
+                <div class="stat-content">
+                    <p><strong>期間内バー数:</strong> {{ result.bars_in_range }}</p>
+                    <p><strong>セッション内:</strong> {{ result.bars_in_session }}</p>
+                    <p><strong>HTFシグナルOK:</strong> {{ result.bars_htf_ok }}</p>
+                    <p><strong>特徴量なし:</strong> {{ result.bars_feature_missing }}</p>
+                    <p><strong>ルール成立:</strong> {{ result.bars_rule_true }}</p>
+                    <p><strong>エントリー:</strong> {{ result.entries }}</p>
+                    {% if result.get('db_features_count') is not none %}
+                    <p><strong>DB特徴量件数:</strong> {{ result.db_features_count }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% if result.get('htf_signals_total') is not none %}
+            <div class="stat-box">
+                <h3>HTFシグナル診断</h3>
+                <div class="stat-content">
+                    <p><strong>シグナル総数:</strong> {{ result.htf_signals_total }}</p>
+                    <p><strong>期間内シグナル:</strong> {{ result.htf_signals_in_range }}</p>
+                    <p><strong>シグナル後24h内バー:</strong> {{ result.bars_htf_ok }}</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
     {% endif %}
 
     {% if trades %}
