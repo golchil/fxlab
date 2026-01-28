@@ -62,6 +62,9 @@
                     <p><strong>勝ち:</strong> {{ result.wins }}</p>
                     <p><strong>負け:</strong> {{ result.losses }}</p>
                     <p><strong>勝率:</strong> {{ "%.1f" | format(result.win_rate * 100) }}%</p>
+                    {% if result.get('loss_rate') is not none %}
+                    <p><strong>負け率:</strong> {{ "%.1f" | format(result.loss_rate * 100) }}%</p>
+                    {% endif %}
                 </div>
             </div>
             <div class="stat-box">
@@ -85,6 +88,31 @@
                     <p><strong>最大連敗:</strong> {{ result.max_consecutive_losses }}</p>
                 </div>
             </div>
+            {% if result.get('expectancy_pips_per_trade') is not none %}
+            <div class="stat-box">
+                <h3>期待値</h3>
+                <div class="stat-content">
+                    <p><strong>平均利益 (raw):</strong> {{ result.avg_profit_pips }} pips</p>
+                    <p><strong>平均損失 (raw):</strong> {{ result.avg_loss_pips }} pips</p>
+                    <p><strong>往復コスト:</strong> {{ result.cost_per_trade_pips }} pips/取引</p>
+                    <p><strong>期待値:</strong>
+                        <span style="font-size:1.1em; font-weight:bold; color: {{ 'green' if result.expectancy_pips_per_trade > 0 else 'red' if result.expectancy_pips_per_trade < 0 else 'inherit' }};">
+                            {{ result.expectancy_pips_per_trade }} pips/取引
+                        </span>
+                    </p>
+                    <p><strong>期待値 × 取引回数:</strong>
+                        <span style="color: {{ 'green' if result.expectancy_total_pips > 0 else 'red' if result.expectancy_total_pips < 0 else 'inherit' }};">
+                            {{ result.expectancy_total_pips }} pips
+                        </span>
+                    </p>
+                    <p><strong>期待値 (R):</strong>
+                        <span style="color: {{ 'green' if result.expectancy_r_per_trade > 0 else 'red' if result.expectancy_r_per_trade < 0 else 'inherit' }};">
+                            {{ result.expectancy_r_per_trade }} R/取引
+                        </span>
+                    </p>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </section>
     {% endif %}

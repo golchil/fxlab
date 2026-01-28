@@ -1253,13 +1253,20 @@ def backtest_task(
 
         # Calculate summary
         total_trades = len(trades_list)
+        cost_per_trade = strategy.fee_pips or 0.0
         if total_trades > 0:
             pnls = [t.pnl_pips for t in trades_list]
+            # Raw pnl (before fee) for expectancy decomposition
+            raw_pnls = [p + cost_per_trade for p in pnls]
+            raw_wins = [p for p in raw_pnls if p > 0]
+            raw_losses = [p for p in raw_pnls if p <= 0]
+
             wins = [p for p in pnls if p > 0]
             losses = [p for p in pnls if p <= 0]
             win_count = len(wins)
             loss_count = len(losses)
             win_rate = win_count / total_trades
+            loss_rate = loss_count / total_trades
 
             gross_profit = sum(wins) if wins else 0
             gross_loss = abs(sum(losses)) if losses else 0
@@ -1269,6 +1276,19 @@ def backtest_task(
             avg_r = sum(r_multiples) / len(r_multiples)
             total_pnl_pips = sum(pnls)
             avg_pnl_pips = total_pnl_pips / total_trades
+
+            # Expectancy: use raw (pre-fee) profit/loss, then subtract cost
+            avg_profit_pips = sum(raw_wins) / len(raw_wins) if raw_wins else 0.0
+            avg_loss_pips = abs(sum(raw_losses)) / len(raw_losses) if raw_losses else 0.0
+            expectancy_pips = (win_rate * avg_profit_pips) - (loss_rate * avg_loss_pips) - cost_per_trade
+            expectancy_total_pips = expectancy_pips * total_trades
+
+            # R-based expectancy
+            r_wins = [r for r in r_multiples if r > 0]
+            r_losses = [r for r in r_multiples if r <= 0]
+            avg_r_win = sum(r_wins) / len(r_wins) if r_wins else 0.0
+            avg_r_loss = abs(sum(r_losses)) / len(r_losses) if r_losses else 0.0
+            expectancy_r = (win_rate * avg_r_win) - (loss_rate * avg_r_loss)
 
             cumulative = 0
             peak = 0
@@ -1301,6 +1321,7 @@ def backtest_task(
                 "total_trades": total_trades,
                 "wins": win_count, "losses": loss_count,
                 "win_rate": round(win_rate, 4),
+                "loss_rate": round(loss_rate, 4),
                 "profit_factor": round(min(profit_factor, 999.99), 2),
                 "avg_r": round(avg_r, 4),
                 "max_dd": round(max_dd, 2),
@@ -1308,13 +1329,23 @@ def backtest_task(
                 "avg_pnl_pips": round(avg_pnl_pips, 2),
                 "max_consecutive_wins": max_consec_wins,
                 "max_consecutive_losses": max_consec_losses,
+                "avg_profit_pips": round(avg_profit_pips, 2),
+                "avg_loss_pips": round(avg_loss_pips, 2),
+                "cost_per_trade_pips": round(cost_per_trade, 2),
+                "expectancy_pips_per_trade": round(expectancy_pips, 4),
+                "expectancy_total_pips": round(expectancy_total_pips, 2),
+                "expectancy_r_per_trade": round(expectancy_r, 4),
             }
         else:
             result_summary = {
                 "total_trades": 0, "wins": 0, "losses": 0,
-                "win_rate": 0, "profit_factor": 0, "avg_r": 0, "max_dd": 0,
+                "win_rate": 0, "loss_rate": 0, "profit_factor": 0, "avg_r": 0, "max_dd": 0,
                 "total_pnl_pips": 0, "avg_pnl_pips": 0,
                 "max_consecutive_wins": 0, "max_consecutive_losses": 0,
+                "avg_profit_pips": 0, "avg_loss_pips": 0,
+                "cost_per_trade_pips": round(cost_per_trade, 2),
+                "expectancy_pips_per_trade": 0, "expectancy_total_pips": 0,
+                "expectancy_r_per_trade": 0,
             }
 
         run.status = "completed"
