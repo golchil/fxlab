@@ -332,6 +332,10 @@
         <div class="forms-row">
             <div class="form-box">
                 <h3>スイングポイント生成（ZigZag）</h3>
+                <p style="font-size: 0.85em; color: #666; margin-bottom: 1rem; background: #e8f5e9; padding: 0.5rem; border-radius: 4px;">
+                    <strong>確定方式（未来参照なし）</strong><br>
+                    山/谷は閾値反転を確認した時刻で確定。バックテストで未来参照が発生しません。
+                </p>
                 <form action="/ui/datasets/{{ dataset.id }}/swings" method="post">
                     <div class="form-group">
                         <label for="swing_timeframe">時間足</label>

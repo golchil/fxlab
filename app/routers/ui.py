@@ -1426,6 +1426,7 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
     # Check if swing_points exist for dow_timeframe
     dow_swing_warning = None
     dow_swing_count = 0
+    dow_old_format = False
     if strategy.dow_timeframe_id and strategy.instrument_id:
         dow_swing_count = db.query(func.count(SwingPoint.id)).filter(
             SwingPoint.dataset_id == strategy.dataset_id,
@@ -1433,7 +1434,18 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
             SwingPoint.timeframe_id == strategy.dow_timeframe_id,
         ).scalar() or 0
         if dow_swing_count == 0:
-            dow_swing_warning = f"スイングポイントが未生成です。データセット詳細ページでスイング生成を行ってください。"
+            dow_swing_warning = "スイングポイントが未生成です。データセット詳細ページでスイング生成を行ってください。"
+        else:
+            # Check for old-format swings (ts == confirmed_ts indicates migration-filled data)
+            old_format_count = db.query(func.count(SwingPoint.id)).filter(
+                SwingPoint.dataset_id == strategy.dataset_id,
+                SwingPoint.instrument_id == strategy.instrument_id,
+                SwingPoint.timeframe_id == strategy.dow_timeframe_id,
+                SwingPoint.ts == SwingPoint.confirmed_ts,
+            ).scalar() or 0
+            if old_format_count > 0:
+                dow_old_format = True
+                dow_swing_warning = f"旧形式のスイングポイント({old_format_count}件)が含まれています。未来参照を排除するため、スイングの再生成を推奨します。"
 
     runs = (
         db.query(BacktestRun)

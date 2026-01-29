@@ -206,7 +206,8 @@ class SwingPoint(Base):
     dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
     timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 山/谷の価格発生時刻
+    confirmed_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 確定時刻（閾値反転確認）
     kind: Mapped[str] = mapped_column(String(16))  # "high" or "low"
     price: Mapped[float] = mapped_column(Float)
     method: Mapped[str] = mapped_column(String(32))  # "zigzag"
@@ -221,6 +222,7 @@ class SwingPoint(Base):
 
     __table_args__ = (
         Index("ix_swing_points_lookup", "dataset_id", "instrument_id", "timeframe_id", "ts"),
+        Index("ix_swing_points_confirmed_lookup", "dataset_id", "instrument_id", "timeframe_id", "kind", "confirmed_ts"),
     )
 
 

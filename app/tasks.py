@@ -976,30 +976,33 @@ def backtest_task(
             )
             htf_signals = [r[0] for r in htf_signals_q]
 
-        # Dow Theory trend setup
+        # Dow Theory trend setup (未来参照なし: confirmed_tsでフィルタ)
         dow_enabled = strategy.dow_timeframe_id is not None
-        swing_highs = []  # list of (ts, price)
+        swing_highs = []  # list of (confirmed_ts, price)
         swing_lows = []
         if dow_enabled:
             swings_q = (
-                db.query(SwingPoint.ts, SwingPoint.kind, SwingPoint.price)
+                db.query(SwingPoint.confirmed_ts, SwingPoint.kind, SwingPoint.price)
                 .filter(
                     SwingPoint.dataset_id == strategy.dataset_id,
                     SwingPoint.instrument_id == strategy.instrument_id,
                     SwingPoint.timeframe_id == strategy.dow_timeframe_id,
                 )
-                .order_by(SwingPoint.ts)
+                .order_by(SwingPoint.confirmed_ts)
                 .all()
             )
-            for ts, kind, price in swings_q:
+            for confirmed_ts, kind, price in swings_q:
                 if kind == "high":
-                    swing_highs.append((ts, price))
+                    swing_highs.append((confirmed_ts, price))
                 else:
-                    swing_lows.append((ts, price))
+                    swing_lows.append((confirmed_ts, price))
 
         def compute_dow_trend(bar_ts):
             """
-            Compute Dow Theory trend based on recent swing highs/lows.
+            Compute Dow Theory trend based on CONFIRMED swing highs/lows.
+            Uses confirmed_ts (when swing was confirmed) not ts (when price occurred).
+            This eliminates look-ahead bias.
+
             Returns "up", "down", or "range".
             - up: higher highs AND higher lows (last 2 pairs)
             - down: lower highs AND lower lows
@@ -1009,12 +1012,12 @@ def backtest_task(
                 return "range"
 
             import bisect
-            # Find swing points before bar_ts
+            # Find swing points where confirmed_ts <= bar_ts (no future reference)
             h_idx = bisect.bisect_right([h[0] for h in swing_highs], bar_ts)
             l_idx = bisect.bisect_right([l[0] for l in swing_lows], bar_ts)
 
-            recent_highs = swing_highs[:h_idx][-2:]  # Last 2 highs before bar_ts
-            recent_lows = swing_lows[:l_idx][-2:]    # Last 2 lows before bar_ts
+            recent_highs = swing_highs[:h_idx][-2:]  # Last 2 confirmed highs
+            recent_lows = swing_lows[:l_idx][-2:]    # Last 2 confirmed lows
 
             if len(recent_highs) < 2 or len(recent_lows) < 2:
                 return "range"
@@ -1763,7 +1766,7 @@ def resample_bars_task(
 
 def zigzag_swing_detection(bars, threshold, min_bars=5):
     """
-    ZigZagアルゴリズムでスイングハイ/ローを検出する。
+    ZigZagアルゴリズムでスイングハイ/ローを検出する（未来参照なし版）。
 
     Args:
         bars: List of (ts, open, high, low, close) tuples
@@ -1771,7 +1774,11 @@ def zigzag_swing_detection(bars, threshold, min_bars=5):
         min_bars: 最小バー数（高値/安値間）
 
     Returns:
-        List of (ts, kind, price) tuples where kind is "high" or "low"
+        List of (ts, confirmed_ts, kind, price) tuples
+        - ts: 山/谷の価格が発生した時刻
+        - confirmed_ts: スイングが確定した時刻（閾値反転を確認したバー）
+        - kind: "high" or "low"
+        - price: 山/谷の価格
     """
     if len(bars) < min_bars * 2:
         return []
@@ -1785,46 +1792,51 @@ def zigzag_swing_detection(bars, threshold, min_bars=5):
     max_high = max(init_highs, key=lambda x: x[0])
     min_low = min(init_lows, key=lambda x: x[0])
 
+    # 追跡中のピボット（まだ確定していない山/谷）
+    # pending = (kind, pivot_ts, pivot_price)
+    pending = None
+
     # 最初のスイングを決定
     if max_high[0] - min_low[0] >= threshold:
         if init_highs.index(max_high) < init_lows.index(min_low):
-            # 高値が先
-            last_swing = ("high", max_high[1], max_high[0])
-            swings.append((max_high[1], "high", max_high[0]))
+            # 高値が先に出現 → 高値から開始
+            pending = ("high", max_high[1], max_high[0])
         else:
-            # 安値が先
-            last_swing = ("low", min_low[1], min_low[0])
-            swings.append((min_low[1], "low", min_low[0]))
+            # 安値が先に出現 → 安値から開始
+            pending = ("low", min_low[1], min_low[0])
     else:
         # しきい値未満なら高値から開始
-        last_swing = ("high", max_high[1], max_high[0])
-        swings.append((max_high[1], "high", max_high[0]))
+        pending = ("high", max_high[1], max_high[0])
 
     # バーを走査
     for i in range(min_bars, len(bars)):
         bar = bars[i]
-        ts, open_, high, low, close = bar
+        current_ts, open_, high, low, close = bar
 
-        if last_swing[0] == "high":
+        if pending[0] == "high":
             # 前回が高値 → 安値を探す
-            if high > last_swing[2]:
-                # より高い高値が出現 → 高値を更新
-                swings[-1] = (ts, "high", high)
-                last_swing = ("high", ts, high)
-            elif last_swing[2] - low >= threshold:
-                # しきい値以上の下落 → 新しい安値
-                swings.append((ts, "low", low))
-                last_swing = ("low", ts, low)
+            if high > pending[2]:
+                # より高い高値が出現 → ピボットを更新（まだ確定しない）
+                pending = ("high", current_ts, high)
+            elif pending[2] - low >= threshold:
+                # しきい値以上の下落 → 高値が確定！
+                # confirmed_ts = 現在のバー時刻（反転を確認した時刻）
+                swings.append((pending[1], current_ts, "high", pending[2]))
+                # 新しい安値のピボットを開始
+                pending = ("low", current_ts, low)
         else:
             # 前回が安値 → 高値を探す
-            if low < last_swing[2]:
-                # より低い安値が出現 → 安値を更新
-                swings[-1] = (ts, "low", low)
-                last_swing = ("low", ts, low)
-            elif high - last_swing[2] >= threshold:
-                # しきい値以上の上昇 → 新しい高値
-                swings.append((ts, "high", high))
-                last_swing = ("high", ts, high)
+            if low < pending[2]:
+                # より低い安値が出現 → ピボットを更新（まだ確定しない）
+                pending = ("low", current_ts, low)
+            elif high - pending[2] >= threshold:
+                # しきい値以上の上昇 → 安値が確定！
+                # confirmed_ts = 現在のバー時刻（反転を確認した時刻）
+                swings.append((pending[1], current_ts, "low", pending[2]))
+                # 新しい高値のピボットを開始
+                pending = ("high", current_ts, high)
+
+    # 注意: 最後のpendingは確定していないので追加しない（未来参照防止）
 
     return swings
 
@@ -1945,12 +1957,13 @@ def generate_swings_task(
 
         # DB保存
         swing_objs = []
-        for ts, kind, price in swings:
+        for ts, confirmed_ts, kind, price in swings:
             swing_objs.append(SwingPoint(
                 dataset_id=dataset_id,
                 instrument_id=instrument.id,
                 timeframe_id=tf.id,
                 ts=ts,
+                confirmed_ts=confirmed_ts,
                 kind=kind,
                 price=price,
                 method=method,
