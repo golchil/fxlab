@@ -94,10 +94,22 @@
         </div>
     </section>
 
+    {% if trade_image and trade_image.range_image_key %}
+    <section class="info-section">
+        <h2>取引全体像</h2>
+        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
+            エントリーからエグジットまでの全体チャート（ハイライト部分が取引区間）
+        </p>
+        <div class="trade-range-image">
+            <img src="/ui/trades/{{ trade.id }}/range.png" alt="Trade Range Chart" loading="lazy">
+        </div>
+    </section>
+    {% endif %}
+
     <section class="info-section">
         <h2>チャート画像</h2>
         <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
-            ※ 足の開始時刻に丸めて画像を生成しています
+            ※ 足の開始時刻に丸めて画像を生成しています（青線: ENTRY、オレンジ線: EXIT）
         </p>
         <div class="trade-images">
             <div class="trade-image-box">
@@ -132,6 +144,18 @@
 </div>
 
 <style>
+.trade-range-image {
+    max-width: 100%;
+}
+
+.trade-range-image img {
+    width: 100%;
+    max-width: 900px;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
 .trade-images {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));

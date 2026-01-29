@@ -289,6 +289,7 @@ class TradeImage(Base):
     trade_id: Mapped[int] = mapped_column(ForeignKey("trades.id", ondelete="CASCADE"), unique=True)
     entry_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     exit_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    range_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     lookback_n: Mapped[int] = mapped_column(Integer)
     ma_periods: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g., "5,20,60"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

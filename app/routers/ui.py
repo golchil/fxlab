@@ -2144,8 +2144,12 @@ def generate_trade_image(
     target_ts: datetime,
     lookback_n: int,
     ma_periods: list,
+    marker_label: str = None,
+    marker_color: str = None,
 ) -> bytes:
-    """Generate chart image for a trade at given timestamp."""
+    """Generate chart image for a trade at given timestamp with optional marker."""
+    from app.services.image_generator import COLOR_ENTRY, COLOR_EXIT
+
     # Get the timeframe
     tf = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
     if not tf:
@@ -2177,8 +2181,101 @@ def generate_trade_image(
     # Prepare data for image generator
     bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
 
+    # Prepare marker if specified (marker is at the last bar = snapped_ts)
+    markers = None
+    if marker_label and marker_color:
+        marker_bar_index = len(bars) - 1  # Last bar is the target timestamp
+        markers = [(marker_bar_index, marker_label, marker_color)]
+
     # Generate image
-    return generate_candlestick_image(bar_data, ma_periods=ma_periods)
+    return generate_candlestick_image(bar_data, ma_periods=ma_periods, markers=markers)
+
+
+def generate_trade_range_image(
+    db: Session,
+    trade: Trade,
+    strategy: Strategy,
+    ma_periods: list,
+    max_bars: int = 256,
+) -> bytes | None:
+    """Generate chart image showing the full trade range from entry to exit."""
+    from app.services.image_generator import COLOR_ENTRY, COLOR_EXIT
+
+    if not trade.entry_ts or not trade.exit_ts:
+        return None
+
+    # Get the timeframe
+    tf = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
+    if not tf:
+        return None
+
+    # Snap both timestamps to bar start
+    entry_snapped = snap_to_bar_start(trade.entry_ts, tf.minutes)
+    exit_snapped = snap_to_bar_start(trade.exit_ts, tf.minutes)
+
+    # Calculate bars between entry and exit
+    entry_unix = int(entry_snapped.replace(tzinfo=timezone.utc).timestamp())
+    exit_unix = int(exit_snapped.replace(tzinfo=timezone.utc).timestamp())
+    tf_seconds = tf.minutes * 60
+    bars_between = (exit_unix - entry_unix) // tf_seconds + 1
+
+    # If trade spans more than max_bars, skip range image
+    if bars_between > max_bars:
+        return None
+
+    # Add padding before entry and after exit for context
+    padding = max(20, bars_between // 4)  # At least 20 bars padding, or 25% of trade duration
+    total_bars = bars_between + padding * 2
+
+    # Get bars: padding before entry through padding after exit
+    start_ts = datetime.fromtimestamp(entry_unix - padding * tf_seconds, tz=timezone.utc)
+    end_ts = datetime.fromtimestamp(exit_unix + padding * tf_seconds, tz=timezone.utc)
+
+    bars = (
+        db.query(Bar)
+        .filter(
+            Bar.dataset_id == strategy.dataset_id,
+            Bar.instrument_id == strategy.instrument_id,
+            Bar.timeframe_id == tf.id,
+            Bar.ts >= start_ts,
+            Bar.ts <= end_ts,
+        )
+        .order_by(Bar.ts.asc())
+        .all()
+    )
+
+    if len(bars) < 3:
+        return None
+
+    # Prepare data for image generator
+    bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+    # Find entry and exit bar indices
+    entry_idx = None
+    exit_idx = None
+    for i, b in enumerate(bars):
+        if b.ts == entry_snapped:
+            entry_idx = i
+        if b.ts == exit_snapped:
+            exit_idx = i
+
+    if entry_idx is None or exit_idx is None:
+        return None
+
+    # Prepare markers and highlight
+    markers = [
+        (entry_idx, "ENTRY", COLOR_ENTRY),
+        (exit_idx, "EXIT", COLOR_EXIT),
+    ]
+    highlight_range = (entry_idx, exit_idx)
+
+    # Generate image
+    return generate_candlestick_image(
+        bar_data,
+        ma_periods=ma_periods,
+        markers=markers,
+        highlight_range=highlight_range
+    )
 
 
 def get_or_create_trade_images(
@@ -2203,35 +2300,53 @@ def get_or_create_trade_images(
     if existing:
         return existing
 
-    # Generate entry image
+    from app.services.image_generator import COLOR_ENTRY, COLOR_EXIT
+
+    # Generate entry image with ENTRY marker
     entry_image_key = None
     if trade.entry_ts:
         try:
             entry_image_bytes = generate_trade_image(
-                db, trade, strategy, trade.entry_ts, lookback_n, ma_periods
+                db, trade, strategy, trade.entry_ts, lookback_n, ma_periods,
+                marker_label="ENTRY", marker_color=COLOR_ENTRY
             )
             entry_image_key = f"trade_images/{trade.id}/entry.png"
             upload_image(entry_image_key, entry_image_bytes)
         except Exception as e:
             print(f"Error generating entry image for trade {trade.id}: {e}")
 
-    # Generate exit image
+    # Generate exit image with EXIT marker
     exit_image_key = None
     if trade.exit_ts:
         try:
             exit_image_bytes = generate_trade_image(
-                db, trade, strategy, trade.exit_ts, lookback_n, ma_periods
+                db, trade, strategy, trade.exit_ts, lookback_n, ma_periods,
+                marker_label="EXIT", marker_color=COLOR_EXIT
             )
             exit_image_key = f"trade_images/{trade.id}/exit.png"
             upload_image(exit_image_key, exit_image_bytes)
         except Exception as e:
             print(f"Error generating exit image for trade {trade.id}: {e}")
 
+    # Generate range image (entry to exit with both markers) - max 256 bars
+    range_image_key = None
+    if trade.entry_ts and trade.exit_ts:
+        try:
+            range_image_bytes = generate_trade_range_image(
+                db, trade, strategy, ma_periods, max_bars=256
+            )
+            if range_image_bytes:
+                range_image_key = f"trade_images/{trade.id}/range.png"
+                upload_image(range_image_key, range_image_bytes)
+        except Exception as e:
+            print(f"Error generating range image for trade {trade.id}: {e}")
+
     # Save to DB
     trade_image = TradeImage(
         trade_id=trade.id,
         entry_image_key=entry_image_key,
         exit_image_key=exit_image_key,
+        range_image_key=range_image_key,
         lookback_n=lookback_n,
         ma_periods=ma_periods_str,
     )
@@ -2349,6 +2464,34 @@ def ui_trade_exit_image(trade_id: int, db: Session = Depends(get_db)):
 
     try:
         image_bytes = get_image(trade_image.exit_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)
+
+
+@router.get("/trades/{trade_id}/range.png")
+def ui_trade_range_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade range image (entry to exit with both markers)."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.range_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.range_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.range_image_key)
         return Response(content=image_bytes, media_type="image/png")
     except Exception:
         return Response(content=b"", status_code=404)

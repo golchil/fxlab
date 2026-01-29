@@ -1,6 +1,6 @@
 """Candlestick chart image generator using matplotlib."""
 import io
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from datetime import datetime
 
 import matplotlib
@@ -18,6 +18,9 @@ COLOR_DOWN = '#ef5350'  # Red for bearish candles
 COLOR_BG = '#ffffff'  # White background
 COLOR_GRID = '#e0e0e0'  # Light gray grid
 MA_COLORS = ['#1976d2', '#ff9800', '#9c27b0', '#4caf50', '#f44336']  # Blue, Orange, Purple, Green, Red
+COLOR_ENTRY = '#1976d2'  # Blue for entry marker
+COLOR_EXIT = '#ff5722'  # Deep orange for exit marker
+COLOR_RANGE_FILL = '#e3f2fd'  # Light blue for trade range highlight
 
 
 def calculate_sma(closes: List[float], period: int) -> List[float]:
@@ -36,14 +39,18 @@ def generate_candlestick_image(
     bars: List[Tuple[datetime, float, float, float, float]],  # (ts, open, high, low, close)
     ma_periods: List[int] = None,
     image_size: int = None,
+    markers: List[Tuple[int, str, str]] = None,  # List of (bar_index, label, color)
+    highlight_range: Tuple[int, int] = None,  # (start_index, end_index) for range highlight
 ) -> bytes:
     """
-    Generate a candlestick chart with optional moving averages.
+    Generate a candlestick chart with optional moving averages and markers.
 
     Args:
         bars: List of (timestamp, open, high, low, close) tuples, sorted by time
         ma_periods: List of MA periods to draw (e.g., [5, 20, 60])
         image_size: Image size in pixels (square)
+        markers: List of (bar_index, label, color) tuples for vertical line markers
+        highlight_range: Tuple of (start_index, end_index) to highlight range between markers
 
     Returns:
         PNG image as bytes
@@ -116,12 +123,39 @@ def generate_candlestick_image(
     if legend_handles:
         ax.legend(handles=legend_handles, loc='upper left', fontsize=8, framealpha=0.8)
 
-    # Set axis limits
+    # Set axis limits (calculate first for marker positioning)
     price_min = min(lows)
     price_max = max(highs)
     price_margin = (price_max - price_min) * 0.05
+    y_min = price_min - price_margin
+    y_max = price_max + price_margin
+
+    # Draw highlight range if specified (draw first so it's behind markers)
+    if highlight_range is not None:
+        start_idx, end_idx = highlight_range
+        if 0 <= start_idx < n_bars and 0 <= end_idx < n_bars:
+            ax.axvspan(start_idx, end_idx, alpha=0.3, color=COLOR_RANGE_FILL, zorder=0)
+
+    # Draw markers (vertical lines with labels)
+    if markers:
+        for bar_idx, label, color in markers:
+            if 0 <= bar_idx < n_bars:
+                # Draw vertical line
+                ax.axvline(x=bar_idx, color=color, linewidth=2, linestyle='--', alpha=0.8, zorder=10)
+                # Add label at top of chart
+                ax.text(
+                    bar_idx, y_max - price_margin * 0.3,
+                    label,
+                    ha='center', va='top',
+                    fontsize=9, fontweight='bold',
+                    color=color,
+                    bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor=color, alpha=0.9),
+                    zorder=11
+                )
+
+    # Set axis limits (already calculated above)
     ax.set_xlim(-0.5, n_bars - 0.5)
-    ax.set_ylim(price_min - price_margin, price_max + price_margin)
+    ax.set_ylim(y_min, y_max)
 
     # Grid and styling
     ax.grid(True, linestyle='-', alpha=0.3, color=COLOR_GRID)
