@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
     golden_cross_task
 )
+from app.tasks_ml import ml_train_task, ml_infer_task
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -963,9 +964,11 @@ def ui_image_gallery(
     feat: Optional[str] = None,
     op: Optional[str] = None,
     thr: Optional[str] = None,
+    sort: Optional[str] = None,  # "score_desc", "score_asc", or None (time desc)
+    model_id: Optional[int] = None,  # Required when sort by score
     db: Session = Depends(get_db),
 ):
-    """Image gallery page with optional feature filter."""
+    """Image gallery page with optional feature filter and score sorting."""
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not dataset:
         return RedirectResponse(url="/ui/datasets", status_code=303)
@@ -985,13 +988,27 @@ def ui_image_gallery(
         except ValueError:
             pass
 
+    # Check if sorting by score
+    sort_by_score = sort in ("score_desc", "score_asc") and model_id is not None
+
     # Build query
-    query = (
-        db.query(WindowImage, Window, Label.result)
-        .join(Window, WindowImage.window_id == Window.id)
-        .outerjoin(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
-        .filter(WindowImage.dataset_id == dataset_id)
-    )
+    if sort_by_score:
+        # Join with MLScore for score-based sorting
+        query = (
+            db.query(WindowImage, Window, Label.result, MLScore.score)
+            .join(Window, WindowImage.window_id == Window.id)
+            .join(MLScore, MLScore.window_id == Window.id)
+            .outerjoin(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
+            .filter(WindowImage.dataset_id == dataset_id)
+            .filter(MLScore.model_id == model_id)
+        )
+    else:
+        query = (
+            db.query(WindowImage, Window, Label.result)
+            .join(Window, WindowImage.window_id == Window.id)
+            .outerjoin(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts))
+            .filter(WindowImage.dataset_id == dataset_id)
+        )
 
     if label and label != "all":
         query = query.filter(Label.result == label)
@@ -1000,36 +1017,60 @@ def ui_image_gallery(
         query = query.join(WindowFeature, WindowFeature.window_id == Window.id).filter(feat_filter)
 
     # Count
-    count_q = (
-        db.query(func.count(WindowImage.id))
-        .join(Window, WindowImage.window_id == Window.id)
-        .filter(WindowImage.dataset_id == dataset_id)
-    )
+    if sort_by_score:
+        count_q = (
+            db.query(func.count(WindowImage.id))
+            .join(Window, WindowImage.window_id == Window.id)
+            .join(MLScore, MLScore.window_id == Window.id)
+            .filter(WindowImage.dataset_id == dataset_id)
+            .filter(MLScore.model_id == model_id)
+        )
+    else:
+        count_q = (
+            db.query(func.count(WindowImage.id))
+            .join(Window, WindowImage.window_id == Window.id)
+            .filter(WindowImage.dataset_id == dataset_id)
+        )
     if label and label != "all":
         count_q = count_q.join(Label, (Label.dataset_id == dataset_id) & (Label.bar_ts == Window.end_ts)).filter(Label.result == label)
     if feat_filter is not None:
         count_q = count_q.join(WindowFeature, WindowFeature.window_id == Window.id).filter(feat_filter)
     total = count_q.scalar() or 0
 
+    # Apply sorting
+    if sort_by_score:
+        if sort == "score_desc":
+            query = query.order_by(MLScore.score.desc())
+        else:
+            query = query.order_by(MLScore.score.asc())
+    else:
+        query = query.order_by(Window.end_ts.desc())
+
     # Paginate
     offset = (page - 1) * page_size
-    rows = (
-        query
-        .order_by(Window.end_ts.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+    rows = query.offset(offset).limit(page_size).all()
 
     images = []
-    for wi, window, label_result in rows:
-        images.append({
-            "id": wi.id,
-            "window_id": wi.window_id,
-            "end_ts": window.end_ts,
-            "image_url": f"/images/{wi.id}/raw",
-            "label_result": label_result,
-        })
+    if sort_by_score:
+        for wi, window, label_result, score in rows:
+            images.append({
+                "id": wi.id,
+                "window_id": wi.window_id,
+                "end_ts": window.end_ts,
+                "image_url": f"/images/{wi.id}/raw",
+                "label_result": label_result,
+                "score": round(score, 4) if score is not None else None,
+            })
+    else:
+        for wi, window, label_result in rows:
+            images.append({
+                "id": wi.id,
+                "window_id": wi.window_id,
+                "end_ts": window.end_ts,
+                "image_url": f"/images/{wi.id}/raw",
+                "label_result": label_result,
+                "score": None,
+            })
 
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
 
@@ -1040,6 +1081,10 @@ def ui_image_gallery(
 
     # Resolve display name for active feature filter
     feat_display = FEATURE_DISPLAY_NAMES.get(feat, feat) if feat else ""
+
+    # Get available models for sorting dropdown
+    ml_models = db.query(MLModel).filter(MLModel.dataset_id == dataset_id).all()
+    ml_model_list = [{"id": m.id, "name": m.name, "model_type": m.model_type} for m in ml_models]
 
     return templates.TemplateResponse("ui_image_gallery.html", {
         "request": request,
@@ -1055,6 +1100,9 @@ def ui_image_gallery(
         "op": op or "",
         "thr": thr or "",
         "feat_qs": feat_qs,
+        "sort": sort or "",
+        "model_id": model_id,
+        "ml_models": ml_model_list,
     })
 
 
@@ -1458,20 +1506,21 @@ def ui_lab_bars(
     ma60_data = []
 
     for i, b in enumerate(bars):
-        ts_str = b.ts.strftime("%Y-%m-%d") if tf.minutes >= 1440 else b.ts.strftime("%Y-%m-%dT%H:%M:%S")
+        # Convert to UNIX timestamp (UTC seconds) for lightweight-charts
+        ts_unix = int(b.ts.replace(tzinfo=timezone.utc).timestamp())
         bar_data.append({
-            "time": ts_str,
+            "time": ts_unix,
             "open": b.open,
             "high": b.high,
             "low": b.low,
             "close": b.close,
         })
         if ma5[i] is not None:
-            ma5_data.append({"time": ts_str, "value": ma5[i]})
+            ma5_data.append({"time": ts_unix, "value": ma5[i]})
         if ma20[i] is not None:
-            ma20_data.append({"time": ts_str, "value": ma20[i]})
+            ma20_data.append({"time": ts_unix, "value": ma20[i]})
         if ma60[i] is not None:
-            ma60_data.append({"time": ts_str, "value": ma60[i]})
+            ma60_data.append({"time": ts_unix, "value": ma60[i]})
 
     return JSONResponse({
         "bars": bar_data,
@@ -1855,3 +1904,198 @@ def ui_lab_create_strategy(
     db.commit()
     db.refresh(strategy)
     return RedirectResponse(url=f"/ui/strategies/{strategy.id}", status_code=303)
+
+
+# ============ ML Routes ============
+
+@router.get("/ml", response_class=HTMLResponse)
+def ui_ml(request: Request, db: Session = Depends(get_db)):
+    """ML models list page with train/infer forms."""
+    models = db.query(MLModel).order_by(MLModel.created_at.desc()).all()
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
+    timeframes = db.query(Timeframe).order_by(Timeframe.minutes).all()
+
+    # Add metrics to model data
+    model_list = []
+    for m in models:
+        metrics = json.loads(m.metrics_json) if m.metrics_json else {}
+        model_list.append({
+            "id": m.id,
+            "name": m.name,
+            "model_type": m.model_type,
+            "dataset_id": m.dataset_id,
+            "timeframe_id": m.timeframe_id,
+            "label_source": m.label_source,
+            "created_at": m.created_at,
+            "accuracy": metrics.get("best_val_accuracy", 0),
+            "auc": metrics.get("auc", 0),
+            "train_samples": metrics.get("train_samples", 0),
+            "val_samples": metrics.get("val_samples", 0),
+        })
+
+    return templates.TemplateResponse("ui_ml.html", {
+        "request": request,
+        "models": model_list,
+        "datasets": dataset_list,
+        "timeframes": timeframes,
+    })
+
+
+@router.post("/ml/train")
+def ui_ml_train(
+    request: Request,
+    model_name: str = Form(...),
+    model_type: str = Form(...),
+    dataset_id: int = Form(...),
+    timeframe_name: str = Form(...),
+    epochs: int = Form(10),
+    batch_size: int = Form(32),
+    learning_rate: float = Form(0.001),
+    limit: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Start ML training job."""
+    try:
+        limit_val = int(limit) if limit and limit.strip() else None
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+
+        params = {
+            "model_name": model_name,
+            "model_type": model_type,
+            "dataset_id": dataset_id,
+            "timeframe_name": timeframe_name,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "limit": limit_val,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="train",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        ml_train_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            timeframe_name=timeframe_name,
+            model_type=model_type,
+            model_name=model_name,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            limit=limit_val,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        return templates.TemplateResponse("ui_ml.html", {
+            "request": request,
+            "models": [],
+            "datasets": [],
+            "timeframes": [],
+            "error": str(e),
+        })
+
+
+@router.post("/ml/infer")
+def ui_ml_infer(
+    request: Request,
+    model_id: int = Form(...),
+    dataset_id: Optional[int] = Form(None),
+    limit: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Start ML inference job."""
+    try:
+        ml_model = db.query(MLModel).filter(MLModel.id == model_id).first()
+        if not ml_model:
+            raise ValueError(f"Model {model_id} not found")
+
+        limit_val = int(limit) if limit and limit.strip() else None
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+
+        # Use model's dataset if not specified
+        target_dataset_id = dataset_id if dataset_id else ml_model.dataset_id
+
+        params = {
+            "model_id": model_id,
+            "dataset_id": target_dataset_id,
+            "limit": limit_val,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=target_dataset_id,
+            job_type="infer",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        ml_infer_task.delay(
+            job_id=job.id,
+            model_id=model_id,
+            dataset_id=target_dataset_id,
+            limit=limit_val,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        return templates.TemplateResponse("ui_ml.html", {
+            "request": request,
+            "models": [],
+            "datasets": [],
+            "timeframes": [],
+            "error": str(e),
+        })
+
+
+@router.get("/ml/{model_id}", response_class=HTMLResponse)
+def ui_ml_detail(request: Request, model_id: int, db: Session = Depends(get_db)):
+    """ML model detail page."""
+    ml_model = db.query(MLModel).filter(MLModel.id == model_id).first()
+    if not ml_model:
+        return RedirectResponse(url="/ui/ml", status_code=303)
+
+    metrics = json.loads(ml_model.metrics_json) if ml_model.metrics_json else {}
+    config = json.loads(ml_model.config_json) if ml_model.config_json else {}
+
+    # Count scores
+    score_count = db.query(func.count(MLScore.id)).filter(MLScore.model_id == model_id).scalar()
+
+    dataset = db.query(Dataset).filter(Dataset.id == ml_model.dataset_id).first()
+    timeframe = db.query(Timeframe).filter(Timeframe.id == ml_model.timeframe_id).first()
+
+    return templates.TemplateResponse("ui_ml_detail.html", {
+        "request": request,
+        "model": ml_model,
+        "metrics": metrics,
+        "config": config,
+        "score_count": score_count,
+        "dataset": dataset,
+        "timeframe": timeframe,
+    })

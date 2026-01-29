@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - モデル: {{ model.name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>{{ model.name }}</h1>
+        <a href="/ui/ml" class="btn">&larr; ML一覧に戻る</a>
+    </div>
+
+    <div class="section">
+        <h2>基本情報</h2>
+        <table class="info-table">
+            <tr><th>ID</th><td>{{ model.id }}</td></tr>
+            <tr><th>タイプ</th><td>{{ model.model_type }}</td></tr>
+            <tr><th>データセット</th><td><a href="/ui/datasets/{{ dataset.id }}">{{ dataset.name }}</a></td></tr>
+            <tr><th>タイムフレーム</th><td>{{ timeframe.name }}</td></tr>
+            <tr><th>ラベルソース</th><td>{{ model.label_source }}</td></tr>
+            <tr><th>作成日時</th><td>{{ model.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+            <tr><th>スコア件数</th><td>{{ score_count }}</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>設定</h2>
+        <table class="info-table">
+            <tr><th>アーキテクチャ</th><td>{{ config.get('architecture', '-') }}</td></tr>
+            <tr><th>エポック数</th><td>{{ config.get('epochs', '-') }}</td></tr>
+            <tr><th>バッチサイズ</th><td>{{ config.get('batch_size', '-') }}</td></tr>
+            <tr><th>学習率</th><td>{{ config.get('learning_rate', '-') }}</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>メトリクス</h2>
+        <table class="info-table">
+            <tr><th>学習データ数</th><td>{{ metrics.get('train_samples', 0) }}</td></tr>
+            <tr><th>検証データ数</th><td>{{ metrics.get('val_samples', 0) }}</td></tr>
+            <tr><th>検証精度</th><td>{{ (metrics.get('best_val_accuracy', 0) * 100)|round(2) }}%</td></tr>
+            <tr><th>AUC</th><td>{{ (metrics.get('auc', 0) * 100)|round(2) }}%</td></tr>
+            <tr><th>最終Loss</th><td>{{ metrics.get('final_train_loss', '-') }}</td></tr>
+        </table>
+    </div>
+
+    {% if score_count > 0 %}
+    <div class="section">
+        <h2>スコア付きギャラリーを見る</h2>
+        <a href="/ui/datasets/{{ dataset.id }}/images?sort=score_desc&model_id={{ model.id }}" class="btn btn-primary">スコア高い順で表示</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?sort=score_asc&model_id={{ model.id }}" class="btn">スコア低い順で表示</a>
+    </div>
+    {% else %}
+    <div class="section">
+        <h2>推論</h2>
+        <p>このモデルでまだ推論が実行されていません。</p>
+        <form action="/ui/ml/infer" method="post" class="form-inline">
+            <input type="hidden" name="model_id" value="{{ model.id }}">
+            <button type="submit" class="btn btn-primary">推論実行</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

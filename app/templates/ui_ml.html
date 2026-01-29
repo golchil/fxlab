@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - 機械学習{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>機械学習</h1>
+
+    <div class="section">
+        <h2>モデル学習</h2>
+        <form action="/ui/ml/train" method="post" class="form-grid">
+            <div class="form-row">
+                <label>モデル名:</label>
+                <input type="text" name="model_name" required placeholder="例: entry-model-v1">
+            </div>
+            <div class="form-row">
+                <label>モデルタイプ:</label>
+                <select name="model_type" required>
+                    <option value="entry">entry - エントリーポイント検出</option>
+                    <option value="profit">profit - 勝敗予測</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>データセット:</label>
+                <select name="dataset_id" required>
+                    {% for ds in datasets %}
+                    <option value="{{ ds.id }}">{{ ds.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>タイムフレーム:</label>
+                <select name="timeframe_name" required>
+                    {% for tf in timeframes %}
+                    <option value="{{ tf.name }}">{{ tf.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>エポック数:</label>
+                <input type="number" name="epochs" value="10" min="1" max="100">
+            </div>
+            <div class="form-row">
+                <label>バッチサイズ:</label>
+                <input type="number" name="batch_size" value="32" min="8" max="128">
+            </div>
+            <div class="form-row">
+                <label>学習率:</label>
+                <input type="text" name="learning_rate" value="0.001">
+            </div>
+            <div class="form-row">
+                <label>上限件数:</label>
+                <input type="text" name="limit" placeholder="任意">
+            </div>
+            <div class="form-row">
+                <label>開始日時:</label>
+                <input type="text" name="start_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <label>終了日時:</label>
+                <input type="text" name="end_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <button type="submit" class="btn btn-primary">学習開始</button>
+            </div>
+        </form>
+    </div>
+
+    {% if models %}
+    <div class="section">
+        <h2>推論実行</h2>
+        <form action="/ui/ml/infer" method="post" class="form-grid">
+            <div class="form-row">
+                <label>モデル:</label>
+                <select name="model_id" required>
+                    {% for m in models %}
+                    <option value="{{ m.id }}">{{ m.name }} ({{ m.model_type }}, Acc: {{ (m.accuracy * 100)|round(1) }}%)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>対象データセット:</label>
+                <select name="dataset_id">
+                    <option value="">モデルと同じ</option>
+                    {% for ds in datasets %}
+                    <option value="{{ ds.id }}">{{ ds.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>上限件数:</label>
+                <input type="text" name="limit" placeholder="任意">
+            </div>
+            <div class="form-row">
+                <label>開始日時:</label>
+                <input type="text" name="start_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <label>終了日時:</label>
+                <input type="text" name="end_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <button type="submit" class="btn btn-primary">推論実行</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <h2>モデル一覧</h2>
+        {% if models %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>名前</th>
+                    <th>タイプ</th>
+                    <th>ラベルソース</th>
+                    <th>学習データ</th>
+                    <th>精度</th>
+                    <th>AUC</th>
+                    <th>作成日時</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in models %}
+                <tr>
+                    <td>{{ m.id }}</td>
+                    <td><a href="/ui/ml/{{ m.id }}">{{ m.name }}</a></td>
+                    <td>{{ m.model_type }}</td>
+                    <td>{{ m.label_source }}</td>
+                    <td>{{ m.train_samples }} / {{ m.val_samples }}</td>
+                    <td>{{ (m.accuracy * 100)|round(1) }}%</td>
+                    <td>{{ (m.auc * 100)|round(1) }}%</td>
+                    <td>{{ m.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-state">モデルがありません。学習を実行してください。</p>
+        {% endif %}
+    </div>
+
+    <div class="section">
+        <h3>使い方</h3>
+        <div class="info-section">
+            <p><strong>entry モデル:</strong> 実験室で登録したgoodエントリーポイントを正例、ランダムなウィンドウを負例として学習します。</p>
+            <p><strong>profit モデル:</strong> TP/SLラベルから勝ち(tp_hit)と負け(sl_hit)を2クラス分類で学習します。</p>
+            <p><strong>推論後:</strong> データセットの画像ギャラリーでスコア順に並べ替えができます。</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

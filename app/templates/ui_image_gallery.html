@@ -24,6 +24,18 @@
             <a href="/ui/datasets/{{ dataset.id }}/images?label=sl_hit{{ feat_qs }}" class="btn btn-small {% if label == 'sl_hit' %}btn-primary{% endif %}">負け</a>
             <a href="/ui/datasets/{{ dataset.id }}/images?label=neither{{ feat_qs }}" class="btn btn-small {% if label == 'neither' %}btn-primary{% endif %}">どちらでもない</a>
         </div>
+        {% if ml_models %}
+        <div class="filter-bar" style="margin-top: 0.5rem;">
+            <span>スコア順:</span>
+            <select id="score-sort" onchange="applySortFilter()">
+                <option value="">時系列（デフォルト）</option>
+                {% for m in ml_models %}
+                <option value="{{ m.id }}_desc" {% if sort == 'score_desc' and model_id == m.id %}selected{% endif %}>{{ m.name }} ({{ m.model_type }}) 高い順</option>
+                <option value="{{ m.id }}_asc" {% if sort == 'score_asc' and model_id == m.id %}selected{% endif %}>{{ m.name }} ({{ m.model_type }}) 低い順</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
         <div class="gallery-info">
             <span>{{ total }} 件 | ページ {{ page }}/{{ total_pages }}</span>
         </div>
@@ -36,6 +48,9 @@
             <img src="{{ img.image_url }}" alt="Window {{ img.window_id }}" loading="lazy">
             <div class="gallery-item-info">
                 <span class="gallery-ts">{{ img.end_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+                {% if img.score is not none %}
+                <span class="score-badge">{{ img.score }}</span>
+                {% endif %}
                 {% if img.label_result %}
                 <span class="label-badge label-{{ img.label_result }}">{{ img.label_result }}</span>
                 {% endif %}
@@ -45,8 +60,9 @@
     </div>
 
     <div class="pagination">
+        {% set sort_qs = '&sort=' ~ sort ~ '&model_id=' ~ model_id if sort and model_id else '' %}
         {% if page > 1 %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}{{ feat_qs }}" class="btn">&larr; 前へ</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page - 1 }}&label={{ label }}{{ feat_qs }}{{ sort_qs }}" class="btn">&larr; 前へ</a>
         {% else %}
         <span class="btn btn-disabled">&larr; 前へ</span>
         {% endif %}
@@ -54,7 +70,7 @@
         <span class="page-info">ページ {{ page }} / {{ total_pages }}</span>
 
         {% if page < total_pages %}
-        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}{{ feat_qs }}" class="btn">次へ &rarr;</a>
+        <a href="/ui/datasets/{{ dataset.id }}/images?page={{ page + 1 }}&label={{ label }}{{ feat_qs }}{{ sort_qs }}" class="btn">次へ &rarr;</a>
         {% else %}
         <span class="btn btn-disabled">次へ &rarr;</span>
         {% endif %}
@@ -63,4 +79,22 @@
     <p class="empty-state">画像が見つかりません。<a href="/ui/datasets/{{ dataset.id }}">画像を生成</a>してください。</p>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function applySortFilter() {
+    const select = document.getElementById('score-sort');
+    const val = select.value;
+    const baseUrl = '/ui/datasets/{{ dataset.id }}/images?label={{ label }}{{ feat_qs }}';
+
+    if (val) {
+        const [modelId, dir] = val.split('_');
+        const sortVal = dir === 'desc' ? 'score_desc' : 'score_asc';
+        window.location.href = baseUrl + '&sort=' + sortVal + '&model_id=' + modelId;
+    } else {
+        window.location.href = baseUrl;
+    }
+}
+</script>
 {% endblock %}

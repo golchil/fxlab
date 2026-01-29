@@ -301,3 +301,49 @@ class EntryPoint(Base):
         Index("ix_entry_points_dataset", "dataset_id", "instrument_id", "timeframe_id"),
         UniqueConstraint("dataset_id", "instrument_id", "timeframe_id", "ts", "side", name="uq_entry_points_ts"),
     )
+
+
+class MLModel(Base):
+    __tablename__ = "ml_models"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    model_type: Mapped[str] = mapped_column(String(32))  # "entry" or "profit"
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    label_source: Mapped[str] = mapped_column(String(32))  # "entry_points" or "tp_sl"
+    config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metrics_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    artifact_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship()
+    scores: Mapped[list["MLScore"]] = relationship(back_populates="model", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_ml_models_dataset", "dataset_id"),
+        Index("ix_ml_models_type", "model_type"),
+    )
+
+
+class MLScore(Base):
+    __tablename__ = "ml_scores"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    window_id: Mapped[int] = mapped_column(ForeignKey("windows.id", ondelete="CASCADE"))
+    model_id: Mapped[int] = mapped_column(ForeignKey("ml_models.id", ondelete="CASCADE"))
+    score: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship()
+    window: Mapped["Window"] = relationship()
+    model: Mapped["MLModel"] = relationship(back_populates="scores")
+
+    __table_args__ = (
+        Index("ix_ml_scores_lookup", "dataset_id", "timeframe_id", "model_id", "score"),
+        Index("ix_ml_scores_window", "window_id"),
+    )

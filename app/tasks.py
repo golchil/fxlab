@@ -1643,3 +1643,7 @@ def resample_bars_task(
         raise
     finally:
         db.close()
+
+
+# Import ML tasks to register them with celery_app (at end to avoid circular imports)
+from app import tasks_ml  # noqa: F401, E402
