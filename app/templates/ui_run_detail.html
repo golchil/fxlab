@@ -165,6 +165,7 @@
                     <th>損益 (pips)</th>
                     <th>R倍率</th>
                     <th>理由</th>
+                    <th>画像</th>
                 </tr>
             </thead>
             <tbody>
@@ -189,6 +190,9 @@
                         {% elif t.exit_reason == "end_of_data" %}データ終了
                         {% else %}{{ t.exit_reason or "-" }}
                         {% endif %}
+                    </td>
+                    <td>
+                        <a href="/ui/trades/{{ t.id }}" class="btn btn-small">画像で確認</a>
                     </td>
                 </tr>
                 {% endfor %}

@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore, TradeImage
+from app.services.image_generator import generate_candlestick_image
+from app.services.minio_client import upload_image, get_image, image_exists
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
@@ -2109,3 +2111,244 @@ def ui_ml_detail(request: Request, model_id: int, db: Session = Depends(get_db))
         "dataset": dataset,
         "timeframe": timeframe,
     })
+
+
+# ============ Trade Image Routes ============
+
+def get_default_lookback(tf_minutes: int) -> int:
+    """Get default lookback_n based on timeframe."""
+    if tf_minutes <= 1:
+        return 128
+    elif tf_minutes <= 15:
+        return 128
+    elif tf_minutes <= 60:
+        return 72
+    elif tf_minutes <= 240:
+        return 48
+    else:
+        return 32
+
+
+def snap_to_bar_start(ts: datetime, tf_minutes: int) -> datetime:
+    """Snap timestamp to bar start time."""
+    ts_unix = int(ts.replace(tzinfo=timezone.utc).timestamp())
+    bucket_seconds = tf_minutes * 60
+    snapped_unix = (ts_unix // bucket_seconds) * bucket_seconds
+    return datetime.fromtimestamp(snapped_unix, tz=timezone.utc)
+
+
+def generate_trade_image(
+    db: Session,
+    trade: Trade,
+    strategy: Strategy,
+    target_ts: datetime,
+    lookback_n: int,
+    ma_periods: list,
+) -> bytes:
+    """Generate chart image for a trade at given timestamp."""
+    # Get the timeframe
+    tf = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
+    if not tf:
+        raise ValueError("Timeframe not found")
+
+    # Snap to bar start
+    snapped_ts = snap_to_bar_start(target_ts, tf.minutes)
+
+    # Get bars ending at snapped_ts
+    bars = (
+        db.query(Bar)
+        .filter(
+            Bar.dataset_id == strategy.dataset_id,
+            Bar.instrument_id == strategy.instrument_id,
+            Bar.timeframe_id == tf.id,
+            Bar.ts <= snapped_ts,
+        )
+        .order_by(Bar.ts.desc())
+        .limit(lookback_n)
+        .all()
+    )
+
+    if not bars:
+        raise ValueError(f"No bars found before {snapped_ts}")
+
+    # Reverse to chronological order
+    bars = list(reversed(bars))
+
+    # Prepare data for image generator
+    bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+    # Generate image
+    return generate_candlestick_image(bar_data, ma_periods=ma_periods)
+
+
+def get_or_create_trade_images(
+    db: Session,
+    trade: Trade,
+    strategy: Strategy,
+    lookback_n: int = None,
+    ma_periods: list = None,
+) -> TradeImage:
+    """Get or create trade images (cached in MinIO)."""
+    if ma_periods is None:
+        ma_periods = [5, 20, 60]
+
+    tf = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
+    if lookback_n is None:
+        lookback_n = get_default_lookback(tf.minutes if tf else 15)
+
+    ma_periods_str = ",".join(map(str, ma_periods))
+
+    # Check if already exists
+    existing = db.query(TradeImage).filter(TradeImage.trade_id == trade.id).first()
+    if existing:
+        return existing
+
+    # Generate entry image
+    entry_image_key = None
+    if trade.entry_ts:
+        try:
+            entry_image_bytes = generate_trade_image(
+                db, trade, strategy, trade.entry_ts, lookback_n, ma_periods
+            )
+            entry_image_key = f"trade_images/{trade.id}/entry.png"
+            upload_image(entry_image_key, entry_image_bytes)
+        except Exception as e:
+            print(f"Error generating entry image for trade {trade.id}: {e}")
+
+    # Generate exit image
+    exit_image_key = None
+    if trade.exit_ts:
+        try:
+            exit_image_bytes = generate_trade_image(
+                db, trade, strategy, trade.exit_ts, lookback_n, ma_periods
+            )
+            exit_image_key = f"trade_images/{trade.id}/exit.png"
+            upload_image(exit_image_key, exit_image_bytes)
+        except Exception as e:
+            print(f"Error generating exit image for trade {trade.id}: {e}")
+
+    # Save to DB
+    trade_image = TradeImage(
+        trade_id=trade.id,
+        entry_image_key=entry_image_key,
+        exit_image_key=exit_image_key,
+        lookback_n=lookback_n,
+        ma_periods=ma_periods_str,
+    )
+    db.add(trade_image)
+    db.commit()
+    db.refresh(trade_image)
+
+    return trade_image
+
+
+@router.get("/trades/{trade_id}", response_class=HTMLResponse)
+def ui_trade_detail(
+    request: Request,
+    trade_id: int,
+    db: Session = Depends(get_db),
+):
+    """Trade detail page with entry/exit images."""
+    trade = db.query(Trade).filter(Trade.id == trade_id).first()
+    if not trade:
+        return RedirectResponse(url="/ui", status_code=303)
+
+    run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+    if not run:
+        return RedirectResponse(url="/ui", status_code=303)
+
+    strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first()
+    dataset = db.query(Dataset).filter(Dataset.id == strategy.dataset_id).first() if strategy else None
+    instrument = db.query(Instrument).filter(Instrument.id == strategy.instrument_id).first() if strategy else None
+    timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first() if strategy else None
+
+    # Get or create trade images
+    trade_image = None
+    if strategy:
+        try:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+        except Exception as e:
+            print(f"Error getting trade images: {e}")
+
+    # Get prev/next trades in same run
+    prev_trade = (
+        db.query(Trade)
+        .filter(Trade.run_id == trade.run_id, Trade.id < trade.id)
+        .order_by(Trade.id.desc())
+        .first()
+    )
+    next_trade = (
+        db.query(Trade)
+        .filter(Trade.run_id == trade.run_id, Trade.id > trade.id)
+        .order_by(Trade.id.asc())
+        .first()
+    )
+
+    return templates.TemplateResponse("ui_trade_detail.html", {
+        "request": request,
+        "trade": trade,
+        "run": run,
+        "strategy": strategy,
+        "dataset": dataset,
+        "instrument": instrument,
+        "timeframe": timeframe,
+        "trade_image": trade_image,
+        "prev_trade_id": prev_trade.id if prev_trade else None,
+        "next_trade_id": next_trade.id if next_trade else None,
+    })
+
+
+@router.get("/trades/{trade_id}/entry.png")
+def ui_trade_entry_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade entry image."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.entry_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.entry_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.entry_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)
+
+
+@router.get("/trades/{trade_id}/exit.png")
+def ui_trade_exit_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade exit image."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.exit_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.exit_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.exit_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)

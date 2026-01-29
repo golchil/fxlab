@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - 取引詳細 #{{ trade.id }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>取引詳細 #{{ trade.id }}</h1>
+        <div>
+            {% if prev_trade_id %}
+            <a href="/ui/trades/{{ prev_trade_id }}" class="btn">&larr; 前の取引</a>
+            {% endif %}
+            {% if next_trade_id %}
+            <a href="/ui/trades/{{ next_trade_id }}" class="btn">次の取引 &rarr;</a>
+            {% endif %}
+            <a href="/ui/runs/{{ run.id }}" class="btn">実行結果に戻る</a>
+        </div>
+    </div>
+
+    <section class="info-section">
+        <h2>取引情報</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>手法</label>
+                <span>{{ strategy.name if strategy else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>データセット</label>
+                <span>{{ dataset.name if dataset else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>通貨ペア</label>
+                <span>{{ instrument.symbol if instrument else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>時間足</label>
+                <span>{{ timeframe.name if timeframe else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>方向</label>
+                <span style="font-weight: bold; color: {{ '#26a69a' if trade.side == 'long' else '#ef5350' }};">
+                    {{ "Long" if trade.side == "long" else "Short" }}
+                </span>
+            </div>
+            <div class="info-item">
+                <label>損益</label>
+                <span style="font-weight: bold; font-size: 1.2em; color: {{ 'green' if trade.pnl_pips and trade.pnl_pips > 0 else 'red' if trade.pnl_pips and trade.pnl_pips < 0 else 'inherit' }};">
+                    {{ trade.pnl_pips if trade.pnl_pips is not none else "-" }} pips
+                </span>
+            </div>
+        </div>
+    </section>
+
+    <section class="info-section">
+        <h2>エントリー / エグジット</h2>
+        <table class="info-table">
+            <tr>
+                <th></th>
+                <th>エントリー</th>
+                <th>エグジット</th>
+            </tr>
+            <tr>
+                <th>日時</th>
+                <td>{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</td>
+                <td>{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</td>
+            </tr>
+            <tr>
+                <th>価格</th>
+                <td>{{ "%.5f" | format(trade.entry_price) if trade.entry_price else "-" }}</td>
+                <td>{{ "%.5f" | format(trade.exit_price) if trade.exit_price else "-" }}</td>
+            </tr>
+        </table>
+        <div class="info-grid" style="margin-top: 1rem;">
+            <div class="info-item">
+                <label>シグナル時刻</label>
+                <span>{{ trade.signal_ts.strftime('%Y-%m-%d %H:%M') if trade.signal_ts else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>R倍率</label>
+                <span>{{ trade.r_multiple if trade.r_multiple is not none else "-" }}</span>
+            </div>
+            <div class="info-item">
+                <label>決済理由</label>
+                <span>
+                    {% if trade.exit_reason == "tp" %}TP（利確）
+                    {% elif trade.exit_reason == "sl" %}SL（損切）
+                    {% elif trade.exit_reason == "time" %}時間切れ
+                    {% elif trade.exit_reason == "session_end" %}セッション終了
+                    {% elif trade.exit_reason == "end_of_data" %}データ終了
+                    {% else %}{{ trade.exit_reason or "-" }}
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </section>
+
+    <section class="info-section">
+        <h2>チャート画像</h2>
+        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
+            ※ 足の開始時刻に丸めて画像を生成しています
+        </p>
+        <div class="trade-images">
+            <div class="trade-image-box">
+                <h3>エントリー時点</h3>
+                <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
+                {% if trade_image and trade_image.entry_image_key %}
+                <img src="/ui/trades/{{ trade.id }}/entry.png" alt="Entry Chart" loading="lazy">
+                {% else %}
+                <p class="no-image">画像なし</p>
+                {% endif %}
+            </div>
+            <div class="trade-image-box">
+                <h3>エグジット時点</h3>
+                <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
+                {% if trade_image and trade_image.exit_image_key %}
+                <img src="/ui/trades/{{ trade.id }}/exit.png" alt="Exit Chart" loading="lazy">
+                {% else %}
+                <p class="no-image">画像なし</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <div class="nav-buttons" style="margin-top: 2rem; text-align: center;">
+        {% if prev_trade_id %}
+        <a href="/ui/trades/{{ prev_trade_id }}" class="btn btn-large">&larr; 前の取引</a>
+        {% endif %}
+        {% if next_trade_id %}
+        <a href="/ui/trades/{{ next_trade_id }}" class="btn btn-large">次の取引 &rarr;</a>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+.trade-images {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 1.5rem;
+}
+
+.trade-image-box {
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    padding: 1rem;
+    background: var(--gray-50);
+}
+
+.trade-image-box h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+}
+
+.trade-image-box .image-ts {
+    margin: 0 0 0.75rem 0;
+    color: var(--gray-500);
+    font-size: 0.85rem;
+}
+
+.trade-image-box img {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.trade-image-box .no-image {
+    padding: 2rem;
+    text-align: center;
+    color: var(--gray-400);
+    background: var(--gray-100);
+    border-radius: 4px;
+}
+
+.info-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.info-table th, .info-table td {
+    padding: 0.75rem;
+    border: 1px solid var(--gray-200);
+    text-align: left;
+}
+
+.info-table th {
+    background: var(--gray-50);
+    font-weight: 600;
+}
+
+.btn-large {
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+}
+</style>
+{% endblock %}
