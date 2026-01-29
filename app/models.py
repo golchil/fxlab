@@ -218,7 +218,10 @@ class Strategy(Base):
     sl_value: Mapped[float] = mapped_column(Float)
     max_hold_bars: Mapped[int] = mapped_column(Integer, default=100)
     cooldown_bars: Mapped[int] = mapped_column(Integer, default=0)
-    fee_pips: Mapped[float] = mapped_column(Float, default=0.0)
+    fee_pips: Mapped[float] = mapped_column(Float, default=0.0)  # 追加手数料（往復、pips）
+    spread_pips: Mapped[float] = mapped_column(Float, default=0.0)  # スプレッド幅（pips）
+    slippage_pips: Mapped[float] = mapped_column(Float, default=0.0)  # スリッページ（片道、pips）
+    intrabar_fill_mode: Mapped[str] = mapped_column(String(32), default="conservative")  # conservative/optimistic/ignore
     htf_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
     htf_signal_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     htf_lookback_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=24)

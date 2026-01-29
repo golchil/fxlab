@@ -94,7 +94,16 @@
                 <div class="stat-content">
                     <p><strong>平均利益 (raw):</strong> {{ result.avg_profit_pips }} pips</p>
                     <p><strong>平均損失 (raw):</strong> {{ result.avg_loss_pips }} pips</p>
-                    <p><strong>往復コスト:</strong> {{ result.cost_per_trade_pips }} pips/取引</p>
+                    <p><strong>追加手数料:</strong> {{ result.cost_per_trade_pips }} pips/取引</p>
+                    {% if result.get('spread_pips') is not none %}
+                    <p><strong>スプレッド:</strong> {{ result.spread_pips }} pips</p>
+                    <p><strong>スリッページ:</strong> {{ result.slippage_pips }} pips (片道)</p>
+                    <p><strong>同足TP/SL:</strong>
+                        {% if result.intrabar_fill_mode == "conservative" %}保守的
+                        {% elif result.intrabar_fill_mode == "optimistic" %}楽観的
+                        {% else %}無視{% endif %}
+                    </p>
+                    {% endif %}
                     <p><strong>期待値:</strong>
                         <span style="font-size:1.1em; font-weight:bold; color: {{ 'green' if result.expectancy_pips_per_trade > 0 else 'red' if result.expectancy_pips_per_trade < 0 else 'inherit' }};">
                             {{ result.expectancy_pips_per_trade }} pips/取引

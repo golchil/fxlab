@@ -1173,6 +1173,30 @@ def backtest_task(
         sample_close = bars[0].close
         pip_size = 0.01 if sample_close > 50 else 0.0001
 
+        # Spread/slippage in price units
+        spread_price = (strategy.spread_pips or 0.0) * pip_size
+        slippage_price = (strategy.slippage_pips or 0.0) * pip_size
+        half_spread = spread_price / 2
+        intrabar_mode = strategy.intrabar_fill_mode or "conservative"
+
+        def apply_entry_cost(mid_price, side):
+            """Apply spread and slippage to entry price (unfavorable direction)."""
+            if side == "long":
+                # Long: buy at ask + slippage
+                return mid_price + half_spread + slippage_price
+            else:
+                # Short: sell at bid - slippage
+                return mid_price - half_spread - slippage_price
+
+        def apply_exit_cost(mid_price, side, is_stop=False):
+            """Apply spread and slippage to exit price (unfavorable direction)."""
+            if side == "long":
+                # Long exit: sell at bid - slippage
+                return mid_price - half_spread - slippage_price
+            else:
+                # Short exit: buy at ask + slippage
+                return mid_price + half_spread + slippage_price
+
         # Walk bars with diagnostic counters
         trades_list = []
         position = None
@@ -1193,44 +1217,58 @@ def backtest_task(
                 exit_reason = None
 
                 side = position["side"]
-                tp_price = position["tp_price"]
-                sl_price = position["sl_price"]
+                tp_price = position["tp_price"]  # TP判定価格 (mid基準)
+                sl_price = position["sl_price"]  # SL判定価格 (mid基準)
 
+                # TP/SLヒット判定（mid価格ベース）
+                tp_hit = False
+                sl_hit = False
                 if side == "long":
-                    if bar.high >= tp_price:
-                        exit_price = tp_price
-                        exit_reason = "tp"
-                        exited = True
-                    elif bar.low <= sl_price:
-                        exit_price = sl_price
+                    tp_hit = bar.high >= tp_price
+                    sl_hit = bar.low <= sl_price
+                else:  # short
+                    tp_hit = bar.low <= tp_price
+                    sl_hit = bar.high >= sl_price
+
+                # 同足で両方触れた場合の扱い
+                if tp_hit and sl_hit:
+                    if intrabar_mode == "conservative":
+                        # 保守的: SL優先（損切りを先と仮定）
+                        exit_price = apply_exit_cost(sl_price, side)
                         exit_reason = "sl"
                         exited = True
-                else:
-                    if bar.low <= tp_price:
-                        exit_price = tp_price
+                    elif intrabar_mode == "optimistic":
+                        # 楽観的: TP優先
+                        exit_price = apply_exit_cost(tp_price, side)
                         exit_reason = "tp"
                         exited = True
-                    elif bar.high >= sl_price:
-                        exit_price = sl_price
-                        exit_reason = "sl"
-                        exited = True
+                    # ignore: 両方触れた場合は次足へ（exitedはFalseのまま）
+                elif tp_hit:
+                    exit_price = apply_exit_cost(tp_price, side)
+                    exit_reason = "tp"
+                    exited = True
+                elif sl_hit:
+                    exit_price = apply_exit_cost(sl_price, side)
+                    exit_reason = "sl"
+                    exited = True
 
                 if not exited and position["hold_bars"] >= strategy.max_hold_bars:
-                    exit_price = bar.close
+                    exit_price = apply_exit_cost(bar.close, side)
                     exit_reason = "time"
                     exited = True
 
                 if not exited and not is_in_session(bar.ts):
-                    exit_price = bar.close
+                    exit_price = apply_exit_cost(bar.close, side)
                     exit_reason = "session_end"
                     exited = True
 
                 if exited:
+                    # pnl計算（exit_priceは既にスプレッド/スリッページ適用済み）
                     if side == "long":
                         pnl_pips = (exit_price - position["entry_price"]) / pip_size
                     else:
                         pnl_pips = (position["entry_price"] - exit_price) / pip_size
-                    pnl_pips -= strategy.fee_pips
+                    pnl_pips -= strategy.fee_pips  # 追加手数料
 
                     sl_dist = abs(position["entry_price"] - position["sl_raw"]) / pip_size
                     r_multiple = pnl_pips / sl_dist if sl_dist > 0 else 0
@@ -1240,7 +1278,7 @@ def backtest_task(
                         entry_ts=position["entry_ts"],
                         entry_price=position["entry_price"],
                         exit_ts=bar.ts,
-                        exit_price=exit_price,
+                        exit_price=round(exit_price, 6),
                         side=side,
                         pnl_pips=round(pnl_pips, 2),
                         r_multiple=round(r_multiple, 4),
@@ -1278,12 +1316,16 @@ def backtest_task(
                 atr14 = features.get("atr14", 0)
                 side = strategy.side
 
+                # エントリー価格（mid価格）
                 if strategy.entry_timing == "next_open" and i + 1 < len(bars):
-                    entry_price = bars[i + 1].open
+                    entry_mid = bars[i + 1].open
                     entry_ts = bars[i + 1].ts
                 else:
-                    entry_price = bar.close
+                    entry_mid = bar.close
                     entry_ts = bar.ts
+
+                # スプレッド・スリッページを適用した実約定価格
+                entry_price = apply_entry_cost(entry_mid, side)
 
                 if strategy.tp_type == "atr":
                     tp_dist = atr14 * strategy.tp_value
@@ -1295,6 +1337,7 @@ def backtest_task(
                 else:
                     sl_dist = strategy.sl_value * pip_size
 
+                # TP/SL価格は実約定価格から計算
                 if side == "long":
                     tp_price = entry_price + tp_dist
                     sl_price = entry_price - sl_dist
@@ -1306,7 +1349,7 @@ def backtest_task(
 
                 position = {
                     "entry_ts": entry_ts,
-                    "entry_price": entry_price,
+                    "entry_price": round(entry_price, 6),
                     "side": side,
                     "tp_price": tp_price,
                     "sl_price": sl_price,
@@ -1321,7 +1364,7 @@ def backtest_task(
         if position is not None:
             last_bar = bars[-1]
             side = position["side"]
-            exit_price = last_bar.close
+            exit_price = apply_exit_cost(last_bar.close, side)
             if side == "long":
                 pnl_pips = (exit_price - position["entry_price"]) / pip_size
             else:
@@ -1334,7 +1377,7 @@ def backtest_task(
                 entry_ts=position["entry_ts"],
                 entry_price=position["entry_price"],
                 exit_ts=last_bar.ts,
-                exit_price=exit_price,
+                exit_price=round(exit_price, 6),
                 side=side,
                 pnl_pips=round(pnl_pips, 2),
                 r_multiple=round(r_multiple, 4),
@@ -1427,6 +1470,9 @@ def backtest_task(
                 "avg_profit_pips": round(avg_profit_pips, 2),
                 "avg_loss_pips": round(avg_loss_pips, 2),
                 "cost_per_trade_pips": round(cost_per_trade, 2),
+                "spread_pips": round(strategy.spread_pips or 0.0, 2),
+                "slippage_pips": round(strategy.slippage_pips or 0.0, 2),
+                "intrabar_fill_mode": intrabar_mode,
                 "expectancy_pips_per_trade": round(expectancy_pips, 4),
                 "expectancy_total_pips": round(expectancy_total_pips, 2),
                 "expectancy_r_per_trade": round(expectancy_r, 4),
@@ -1439,6 +1485,9 @@ def backtest_task(
                 "max_consecutive_wins": 0, "max_consecutive_losses": 0,
                 "avg_profit_pips": 0, "avg_loss_pips": 0,
                 "cost_per_trade_pips": round(cost_per_trade, 2),
+                "spread_pips": round(strategy.spread_pips or 0.0, 2),
+                "slippage_pips": round(strategy.slippage_pips or 0.0, 2),
+                "intrabar_fill_mode": intrabar_mode,
                 "expectancy_pips_per_trade": 0, "expectancy_total_pips": 0,
                 "expectancy_r_per_trade": 0,
             }

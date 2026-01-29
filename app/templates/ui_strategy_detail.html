@@ -61,8 +61,25 @@
                 <span>{{ strategy.cooldown_bars }} 本</span>
             </div>
             <div class="info-item">
-                <label>往復コスト</label>
+                <label>追加手数料</label>
                 <span>{{ strategy.fee_pips }} pips/取引</span>
+            </div>
+            <div class="info-item">
+                <label>スプレッド</label>
+                <span>{{ strategy.spread_pips or 0.0 }} pips</span>
+            </div>
+            <div class="info-item">
+                <label>スリッページ</label>
+                <span>{{ strategy.slippage_pips or 0.0 }} pips (片道)</span>
+            </div>
+            <div class="info-item">
+                <label>同足TP/SL</label>
+                <span>
+                    {% if strategy.intrabar_fill_mode == "conservative" %}保守的（SL優先）
+                    {% elif strategy.intrabar_fill_mode == "optimistic" %}楽観的（TP優先）
+                    {% else %}無視（次足へ）
+                    {% endif %}
+                </span>
             </div>
             <div class="info-item">
                 <label>HTFフィルタ</label>
