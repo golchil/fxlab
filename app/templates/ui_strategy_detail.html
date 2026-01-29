@@ -93,8 +93,21 @@
             </div>
             <div class="info-item">
                 <label>ダウ判定時間足</label>
-                <span>{{ dow_timeframe.name if dow_timeframe else "未設定" }}</span>
+                <span>
+                    {{ dow_timeframe.name if dow_timeframe else "未設定" }}
+                    {% if dow_timeframe %}
+                    (スイング: {{ dow_swing_count }}件)
+                    {% endif %}
+                </span>
             </div>
+            {% if dow_swing_warning %}
+            <div class="info-item" style="grid-column: 1 / -1;">
+                <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 0.75rem; border-radius: 4px; color: #856404;">
+                    <strong>警告:</strong> {{ dow_swing_warning }}
+                    <a href="/ui/datasets/{{ strategy.dataset_id }}" style="margin-left: 0.5rem;">データセットを開く</a>
+                </div>
+            </div>
+            {% endif %}
             <div class="info-item">
                 <label>作成日</label>
                 <span>{{ strategy.created_at.strftime('%Y-%m-%d %H:%M') }}</span>

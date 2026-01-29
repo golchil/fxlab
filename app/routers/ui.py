@@ -32,6 +32,7 @@ FEATURE_DISPLAY_NAMES = {
     "spread_20_60": "SMA20 と SMA60 の差",
     "atr14": "ATR(14)",
     "vol_mean": "平均出来高",
+    "dow_trend": "ダウトレンド (up/down/range)",
 }
 
 # Get the templates directory path
@@ -1422,6 +1423,18 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
     htf_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.htf_timeframe_id).first() if strategy.htf_timeframe_id else None
     dow_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.dow_timeframe_id).first() if strategy.dow_timeframe_id else None
 
+    # Check if swing_points exist for dow_timeframe
+    dow_swing_warning = None
+    dow_swing_count = 0
+    if strategy.dow_timeframe_id and strategy.instrument_id:
+        dow_swing_count = db.query(func.count(SwingPoint.id)).filter(
+            SwingPoint.dataset_id == strategy.dataset_id,
+            SwingPoint.instrument_id == strategy.instrument_id,
+            SwingPoint.timeframe_id == strategy.dow_timeframe_id,
+        ).scalar() or 0
+        if dow_swing_count == 0:
+            dow_swing_warning = f"スイングポイントが未生成です。データセット詳細ページでスイング生成を行ってください。"
+
     runs = (
         db.query(BacktestRun)
         .filter(BacktestRun.strategy_id == strategy_id)
@@ -1443,6 +1456,8 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
         "timeframe": timeframe,
         "htf_timeframe": htf_timeframe,
         "dow_timeframe": dow_timeframe,
+        "dow_swing_count": dow_swing_count,
+        "dow_swing_warning": dow_swing_warning,
         "runs": runs,
         "rules": rules,
         "feat_names": FEATURE_DISPLAY_NAMES,
