@@ -39,7 +39,8 @@
     <div class="lab-chart-container">
         <div id="chart"></div>
         <p style="margin-top: 0.5rem; color: var(--gray-500); font-size: 0.85rem;">
-            チャート上でクリック → エントリーポイントを登録
+            チャート上でクリック → エントリーポイントを登録<br>
+            ※ クリック時刻は足の開始時刻に丸めて保存します（例: M15の場合 10:23→10:15）
         </p>
     </div>
 
@@ -93,12 +94,12 @@
     const startTs = "{{ start_ts }}";
     const endTs = "{{ end_ts }}";
 
-    // Existing entry points from server
+    // Existing entry points from server (ts_unix = UNIX seconds UTC)
     const existingEntries = [
         {% for ep in entry_points %}
         {
             id: {{ ep.id }},
-            ts: "{{ ep.ts.strftime('%Y-%m-%dT%H:%M:%S') }}",
+            ts_unix: {{ ep.ts.replace(tzinfo=None).timestamp()|int }},
             side: "{{ ep.side }}",
             label: "{{ ep.label }}",
         },
@@ -187,14 +188,14 @@
             else if (ep.label === 'bad') color = '#ef5350';
 
             return {
-                time: ep.ts,
+                time: ep.ts_unix,  // UNIX seconds for lightweight-charts
                 position: isLong ? 'belowBar' : 'aboveBar',
                 color: color,
                 shape: isLong ? 'arrowUp' : 'arrowDown',
                 text: `${isLong ? 'L' : 'S'}(${ep.label})`,
             };
         });
-        markers.sort((a, b) => a.time < b.time ? -1 : 1);
+        markers.sort((a, b) => a.time - b.time);
         candleSeries.setMarkers(markers);
     }
 
@@ -212,7 +213,9 @@
         // Display panel
         const panel = document.getElementById('entryPanel');
         const overlay = document.getElementById('entryOverlay');
-        document.getElementById('entryPanelTs').textContent = `時刻: ${typeof param.time === 'string' ? param.time : new Date(param.time * 1000).toISOString()}`;
+        // Display time in UTC format
+        const displayTime = new Date(param.time * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+        document.getElementById('entryPanelTs').textContent = `時刻: ${displayTime}`;
         document.getElementById('entryPanelPrice').textContent = clickedPrice ? `価格: ${clickedPrice.toFixed(5)}` : '';
         panel.classList.add('active');
         overlay.classList.add('active');
@@ -229,18 +232,8 @@
     window.registerEntry = function(label) {
         if (!clickedTime || !selectedSide || !instrumentId) return;
 
-        // Convert time to ISO string
-        let tsStr;
-        if (typeof clickedTime === 'string') {
-            // Already a string from lightweight-charts
-            if (clickedTime.includes('T')) {
-                tsStr = clickedTime + 'Z';
-            } else {
-                tsStr = clickedTime + 'T00:00:00Z';
-            }
-        } else {
-            tsStr = new Date(clickedTime * 1000).toISOString();
-        }
+        // clickedTime is UNIX seconds from lightweight-charts
+        const tsUnix = typeof clickedTime === 'number' ? clickedTime : Math.floor(new Date(clickedTime).getTime() / 1000);
 
         fetch('/ui/lab/entries', {
             method: 'POST',
@@ -249,7 +242,7 @@
                 dataset_id: datasetId,
                 instrument_id: instrumentId,
                 timeframe_id: timeframeId,
-                ts: tsStr,
+                ts_unix: tsUnix,
                 side: selectedSide,
                 label: label,
             }),
@@ -260,10 +253,10 @@
                 alert('Error: ' + data.error);
                 return;
             }
-            // Add to local entries and update markers
+            // Add to local entries using snapped ts_unix from server
             existingEntries.push({
                 id: data.id,
-                ts: typeof clickedTime === 'string' ? clickedTime : new Date(clickedTime * 1000).toISOString().replace('Z', ''),
+                ts_unix: data.ts_unix,  // Use server-snapped timestamp
                 side: selectedSide,
                 label: label,
             });

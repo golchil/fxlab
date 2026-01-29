@@ -1542,12 +1542,22 @@ def ui_lab_create_entry(
     dataset_id = data["dataset_id"]
     instrument_id = data["instrument_id"]
     timeframe_id = data["timeframe_id"]
-    ts_str = data["ts"]
+    ts_unix = data["ts_unix"]  # UNIX seconds from lightweight-charts
     side = data["side"]
     label = data.get("label", "unknown")
     note = data.get("note")
 
-    ts = parse_optional_datetime(ts_str)
+    # Get timeframe for snapping
+    tf = db.query(Timeframe).filter(Timeframe.id == timeframe_id).first()
+    if not tf:
+        return JSONResponse({"error": "Timeframe not found"}, status_code=400)
+
+    # Snap to bar start time based on timeframe
+    bucket_seconds = tf.minutes * 60
+    snapped_unix = (ts_unix // bucket_seconds) * bucket_seconds
+
+    # Convert to UTC datetime
+    ts = datetime.fromtimestamp(snapped_unix, tz=timezone.utc)
 
     # Upsert: check existing
     existing = db.query(EntryPoint).filter(
@@ -1564,7 +1574,7 @@ def ui_lab_create_entry(
             existing.note = note
         db.commit()
         db.refresh(existing)
-        return JSONResponse({"id": existing.id, "action": "updated"})
+        return JSONResponse({"id": existing.id, "action": "updated", "ts_unix": snapped_unix})
 
     ep = EntryPoint(
         dataset_id=dataset_id,
@@ -1578,7 +1588,7 @@ def ui_lab_create_entry(
     db.add(ep)
     db.commit()
     db.refresh(ep)
-    return JSONResponse({"id": ep.id, "action": "created"})
+    return JSONResponse({"id": ep.id, "action": "created", "ts_unix": snapped_unix})
 
 
 @router.delete("/lab/entries/{entry_id}")
