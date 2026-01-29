@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore, TradeImage
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore, TradeImage, SwingPoint
 from app.services.image_generator import generate_candlestick_image
 from app.services.minio_client import upload_image, get_image, image_exists
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
-    golden_cross_task
+    golden_cross_task, generate_swings_task
 )
 from app.tasks_ml import ml_train_task, ml_infer_task
 
@@ -248,6 +248,63 @@ def get_signals_stats(dataset_id: int, db: Session):
     }
 
 
+def get_swings_stats(dataset_id: int, db: Session):
+    """Get swing points statistics for a dataset."""
+    total = db.query(func.count(SwingPoint.id)).filter(SwingPoint.dataset_id == dataset_id).scalar() or 0
+    high_count = db.query(func.count(SwingPoint.id)).filter(
+        SwingPoint.dataset_id == dataset_id, SwingPoint.kind == "high"
+    ).scalar() or 0
+    low_count = db.query(func.count(SwingPoint.id)).filter(
+        SwingPoint.dataset_id == dataset_id, SwingPoint.kind == "low"
+    ).scalar() or 0
+
+    # ユニークな時間足リスト
+    tf_names = (
+        db.query(Timeframe.name)
+        .join(SwingPoint, SwingPoint.timeframe_id == Timeframe.id)
+        .filter(SwingPoint.dataset_id == dataset_id)
+        .distinct()
+        .all()
+    )
+    timeframes = [tf[0] for tf in tf_names]
+
+    # グループ化: timeframe, method, threshold_type, threshold_value
+    groups = (
+        db.query(
+            Timeframe.name,
+            SwingPoint.method,
+            SwingPoint.threshold_type,
+            SwingPoint.threshold_value,
+            SwingPoint.min_bars,
+            func.count(SwingPoint.id),
+        )
+        .join(Timeframe, Timeframe.id == SwingPoint.timeframe_id)
+        .filter(SwingPoint.dataset_id == dataset_id)
+        .group_by(Timeframe.name, SwingPoint.method, SwingPoint.threshold_type, SwingPoint.threshold_value, SwingPoint.min_bars)
+        .all()
+    )
+
+    swing_groups = [
+        {
+            "timeframe": tf_name,
+            "method": method,
+            "threshold_type": th_type,
+            "threshold_value": th_val,
+            "min_bars": min_b,
+            "count": cnt,
+        }
+        for tf_name, method, th_type, th_val, min_b, cnt in groups
+    ]
+
+    return {
+        "total_swings": total,
+        "high_count": high_count,
+        "low_count": low_count,
+        "timeframes": timeframes,
+        "swing_groups": swing_groups,
+    }
+
+
 def parse_optional_datetime(value: str) -> Optional[datetime]:
     """Parse optional ISO8601 datetime string."""
     if not value or value.strip() == "":
@@ -291,6 +348,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
     images_stats = get_images_stats(dataset_id, db)
     features_stats = get_features_stats(dataset_id, db)
     signals_stats = get_signals_stats(dataset_id, db)
+    swings_stats = get_swings_stats(dataset_id, db)
     timeframes = get_timeframe_info(dataset_id, db)
 
     return templates.TemplateResponse("ui_dataset_detail.html", {
@@ -301,6 +359,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "images_stats": images_stats,
         "features_stats": features_stats,
         "signals_stats": signals_stats,
+        "swings_stats": swings_stats,
         "timeframes": timeframes,
     })
 
@@ -796,6 +855,82 @@ def ui_create_golden_cross(
             "images_stats": get_images_stats(dataset_id, db),
             "features_stats": get_features_stats(dataset_id, db),
             "signals_stats": get_signals_stats(dataset_id, db),
+            "swings_stats": get_swings_stats(dataset_id, db),
+            "timeframes": get_timeframe_info(dataset_id, db),
+            "error": str(e),
+        })
+
+
+@router.post("/datasets/{dataset_id}/swings")
+def ui_create_swings(
+    request: Request,
+    dataset_id: int,
+    timeframe: str = Form("H1"),
+    threshold_type: str = Form("atr"),
+    threshold_value: float = Form(1.0),
+    min_bars: int = Form(5),
+    overwrite: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create swing points (Dow Theory highs/lows) generation job."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    try:
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+        overwrite_flag = overwrite == "on"
+
+        params = {
+            "timeframe": timeframe,
+            "method": "zigzag",
+            "threshold_type": threshold_type,
+            "threshold_value": threshold_value,
+            "min_bars": min_bars,
+            "overwrite": overwrite_flag,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="swings",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        generate_swings_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            timeframe=timeframe,
+            method="zigzag",
+            threshold_type=threshold_type,
+            threshold_value=threshold_value,
+            min_bars=min_bars,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+            overwrite=overwrite_flag,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        dataset_data = get_dataset_response(dataset, db)
+        return templates.TemplateResponse("ui_dataset_detail.html", {
+            "request": request,
+            "dataset": dataset_data,
+            "windows_stats": get_windows_stats(dataset_id, db),
+            "labels_stats": get_labels_stats(dataset_id, db),
+            "images_stats": get_images_stats(dataset_id, db),
+            "features_stats": get_features_stats(dataset_id, db),
+            "signals_stats": get_signals_stats(dataset_id, db),
+            "swings_stats": get_swings_stats(dataset_id, db),
             "timeframes": get_timeframe_info(dataset_id, db),
             "error": str(e),
         })
@@ -1222,6 +1357,7 @@ def ui_create_strategy(
     htf_signal_type: Optional[str] = Form(None),
     htf_lookback_hours: Optional[str] = Form(None),
     require_htf_signal: Optional[str] = Form(None),
+    dow_timeframe_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a strategy from form submission."""
@@ -1234,6 +1370,9 @@ def ui_create_strategy(
     htf_sig = htf_signal_type.strip() if htf_signal_type and htf_signal_type.strip() else None
     htf_hours = int(htf_lookback_hours) if htf_lookback_hours and htf_lookback_hours.strip() else 24
     htf_required = require_htf_signal == "on"
+
+    # Parse Dow Theory timeframe
+    dow_tf_id = int(dow_timeframe_id) if dow_timeframe_id and dow_timeframe_id.strip() else None
 
     strategy = Strategy(
         name=name,
@@ -1261,6 +1400,7 @@ def ui_create_strategy(
         htf_lookback_hours=htf_hours,
         htf_confirmed_only=True,
         require_htf_signal=htf_required,
+        dow_timeframe_id=dow_tf_id,
         created_at=datetime.utcnow(),
     )
     db.add(strategy)
@@ -1280,6 +1420,7 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
     instrument = db.query(Instrument).filter(Instrument.id == strategy.instrument_id).first()
     timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
     htf_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.htf_timeframe_id).first() if strategy.htf_timeframe_id else None
+    dow_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.dow_timeframe_id).first() if strategy.dow_timeframe_id else None
 
     runs = (
         db.query(BacktestRun)
@@ -1301,6 +1442,7 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
         "instrument": instrument,
         "timeframe": timeframe,
         "htf_timeframe": htf_timeframe,
+        "dow_timeframe": dow_timeframe,
         "runs": runs,
         "rules": rules,
         "feat_names": FEATURE_DISPLAY_NAMES,
@@ -1423,6 +1565,7 @@ def ui_lab(
     timeframe: str = "M1",
     start_ts: Optional[str] = None,
     end_ts: Optional[str] = None,
+    swing_tf: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Lab main page with interactive chart."""
@@ -1453,6 +1596,7 @@ def ui_lab(
         "timeframes": timeframes,
         "selected_dataset_id": dataset_id,
         "selected_timeframe": timeframe,
+        "selected_swing_tf": swing_tf or "",
         "start_ts": start_ts or "",
         "end_ts": end_ts or "",
         "instrument_id": instrument_id,
@@ -1538,6 +1682,48 @@ def ui_lab_bars(
         "instrument_id": instrument_id,
         "timeframe_id": tf.id,
     })
+
+
+@router.get("/lab/swings")
+def ui_lab_swings(
+    dataset_id: int,
+    timeframe: str = "H1",
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """JSON API: swing points for chart markers."""
+    tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
+    if not tf:
+        return JSONResponse({"swings": []})
+
+    first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+    if not first_bar:
+        return JSONResponse({"swings": []})
+    instrument_id = first_bar[0]
+
+    query = db.query(SwingPoint).filter(
+        SwingPoint.dataset_id == dataset_id,
+        SwingPoint.instrument_id == instrument_id,
+        SwingPoint.timeframe_id == tf.id,
+    )
+    if start_ts:
+        query = query.filter(SwingPoint.ts >= parse_optional_datetime(start_ts))
+    if end_ts:
+        query = query.filter(SwingPoint.ts <= parse_optional_datetime(end_ts))
+
+    swings = query.order_by(SwingPoint.ts).limit(1000).all()
+
+    swing_data = []
+    for s in swings:
+        ts_unix = int(s.ts.replace(tzinfo=timezone.utc).timestamp())
+        swing_data.append({
+            "time": ts_unix,
+            "kind": s.kind,  # "high" or "low"
+            "price": s.price,
+        })
+
+    return JSONResponse({"swings": swing_data})
 
 
 @router.post("/lab/entries")

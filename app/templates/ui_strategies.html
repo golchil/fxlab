@@ -220,6 +220,27 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="form-box">
+                    <h3>ダウ理論トレンド</h3>
+                    <p style="font-size: 0.85em; color: #666; margin-bottom: 1rem;">
+                        スイングポイント（山谷）からトレンド判定を行い、ルール条件で使用できます。
+                    </p>
+                    <div class="form-group">
+                        <label for="dow_timeframe_id">ダウ判定用 時間足</label>
+                        <select id="dow_timeframe_id" name="dow_timeframe_id">
+                            <option value="">-- 使用しない --</option>
+                            {% for tf in timeframes %}
+                            <option value="{{ tf.id }}">{{ tf.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <small style="color: #666;">事前にスイングポイントを生成しておく必要があります</small>
+                    </div>
+                    <p style="font-size: 0.85em; color: #666; margin-top: 0.5rem;">
+                        rule_jsonで <code>{"feature": "dow_trend", "operator": "==", "value": "up"}</code> のように使用できます<br>
+                        値: "up" (上昇), "down" (下降), "range" (レンジ)
+                    </p>
+                </div>
             </div>
             <div style="margin-top: 1rem;">
                 <button type="submit" class="btn btn-primary">手法を作成</button>

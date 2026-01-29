@@ -309,6 +309,74 @@
     </section>
 
     <section class="actions-section">
+        <h2>ダウ理論（山谷）生成</h2>
+        <div class="stats-row" style="margin-bottom: 1rem;">
+            <div class="stat-box">
+                <h3>スイングポイント統計</h3>
+                <div class="stat-content">
+                    <p><strong>件数:</strong> {{ swings_stats.total_swings }}</p>
+                    {% if swings_stats.high_count %}
+                    <p><strong>スイングハイ:</strong> {{ swings_stats.high_count }}</p>
+                    <p><strong>スイングロー:</strong> {{ swings_stats.low_count }}</p>
+                    {% endif %}
+                    {% if swings_stats.timeframes %}
+                    <p><strong>時間足:</strong>
+                        {% for tf in swings_stats.timeframes %}
+                        {{ tf }}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="forms-row">
+            <div class="form-box">
+                <h3>スイングポイント生成（ZigZag）</h3>
+                <form action="/ui/datasets/{{ dataset.id }}/swings" method="post">
+                    <div class="form-group">
+                        <label for="swing_timeframe">時間足</label>
+                        <select id="swing_timeframe" name="timeframe">
+                            <option value="M15">M15（15分足）</option>
+                            <option value="H1" selected>H1（1時間足）</option>
+                            <option value="H4">H4（4時間足）</option>
+                            <option value="D1">D1（日足）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="threshold_type">閾値タイプ</label>
+                        <select id="threshold_type" name="threshold_type">
+                            <option value="atr" selected>ATR（動的）</option>
+                            <option value="pips">pips（固定）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="threshold_value">閾値（ATR倍率 or pips）</label>
+                        <input type="number" id="threshold_value" name="threshold_value" value="1.0" step="0.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="min_bars">最小バー数</label>
+                        <input type="number" id="min_bars" name="min_bars" value="5" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="swing_start_ts">開始日時（ISO8601、任意）</label>
+                        <input type="text" id="swing_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="swing_end_ts">終了日時（ISO8601、任意）</label>
+                        <input type="text" id="swing_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="overwrite"> 既存データを上書き
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">スイング生成</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <section class="actions-section">
         <h2>シグナル生成</h2>
         <div class="forms-row">
             <div class="form-box">

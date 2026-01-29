@@ -32,6 +32,16 @@
             <label for="end_ts">終了</label>
             <input type="text" id="end_ts" name="end_ts" value="{{ end_ts }}" placeholder="2024-01-01T00:00:00Z">
         </div>
+        <div class="form-group">
+            <label for="swing_tf">ダウ(山谷)表示</label>
+            <select id="swing_tf" name="swing_tf">
+                <option value="">なし</option>
+                <option value="M15" {{ "selected" if selected_swing_tf == "M15" }}>M15</option>
+                <option value="H1" {{ "selected" if selected_swing_tf == "H1" }}>H1</option>
+                <option value="H4" {{ "selected" if selected_swing_tf == "H4" }}>H4</option>
+                <option value="D1" {{ "selected" if selected_swing_tf == "D1" }}>D1</option>
+            </select>
+        </div>
         <button type="submit" class="btn btn-primary">表示</button>
     </form>
 
@@ -93,6 +103,7 @@
     const timeframe = "{{ selected_timeframe }}";
     const startTs = "{{ start_ts }}";
     const endTs = "{{ end_ts }}";
+    const swingTf = "{{ selected_swing_tf or '' }}";
 
     // Existing entry points from server (ts_unix = UNIX seconds UTC)
     const existingEntries = [
@@ -113,6 +124,7 @@
     let clickedPrice = null;
     let chart = null;
     let candleSeries = null;
+    let swingPoints = [];
 
     // Create chart
     const container = document.getElementById('chart');
@@ -173,15 +185,34 @@
 
             chart.timeScale().fitContent();
 
-            // Add markers for existing entries
-            addEntryMarkers();
+            // Load swing points if enabled
+            if (swingTf) {
+                let swingParams = `dataset_id=${datasetId}&timeframe=${swingTf}`;
+                if (startTs) swingParams += `&start_ts=${encodeURIComponent(startTs)}`;
+                if (endTs) swingParams += `&end_ts=${encodeURIComponent(endTs)}`;
+
+                fetch(`/ui/lab/swings?${swingParams}`)
+                    .then(r => r.json())
+                    .then(swingData => {
+                        swingPoints = swingData.swings || [];
+                        // Add markers for existing entries + swing points
+                        addAllMarkers();
+                    })
+                    .catch(err => {
+                        console.error('Swing fetch error:', err);
+                        addAllMarkers();
+                    });
+            } else {
+                addAllMarkers();
+            }
         })
         .catch(err => {
             container.innerHTML = `<p style="color:red">Error: ${err}</p>`;
         });
 
-    function addEntryMarkers() {
-        const markers = existingEntries.map(ep => {
+    function addAllMarkers() {
+        // Entry point markers
+        const entryMarkers = existingEntries.map(ep => {
             const isLong = ep.side === 'long';
             let color = '#888';
             if (ep.label === 'good') color = '#26a69a';
@@ -195,8 +226,22 @@
                 text: `${isLong ? 'L' : 'S'}(${ep.label})`,
             };
         });
-        markers.sort((a, b) => a.time - b.time);
-        candleSeries.setMarkers(markers);
+
+        // Swing point markers
+        const swingMarkers = swingPoints.map(sp => {
+            const isHigh = sp.kind === 'high';
+            return {
+                time: sp.time,
+                position: isHigh ? 'aboveBar' : 'belowBar',
+                color: isHigh ? '#9c27b0' : '#ff9800',  // Purple for high, Orange for low
+                shape: isHigh ? 'circle' : 'circle',
+                text: isHigh ? 'H' : 'L',
+            };
+        });
+
+        const allMarkers = [...entryMarkers, ...swingMarkers];
+        allMarkers.sort((a, b) => a.time - b.time);
+        candleSeries.setMarkers(allMarkers);
     }
 
     // Chart click handler
@@ -260,7 +305,7 @@
                 side: selectedSide,
                 label: label,
             });
-            addEntryMarkers();
+            addAllMarkers();
             closePanel();
         })
         .catch(err => alert('Error: ' + err));

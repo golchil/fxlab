@@ -198,6 +198,32 @@ class Signal(Base):
     )
 
 
+class SwingPoint(Base):
+    """ダウ理論のスイングハイ/ロー（山谷）"""
+    __tablename__ = "swing_points"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    kind: Mapped[str] = mapped_column(String(16))  # "high" or "low"
+    price: Mapped[float] = mapped_column(Float)
+    method: Mapped[str] = mapped_column(String(32))  # "zigzag"
+    threshold_type: Mapped[str] = mapped_column(String(16))  # "atr" or "pips"
+    threshold_value: Mapped[float] = mapped_column(Float)
+    min_bars: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship()
+    instrument: Mapped["Instrument"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship()
+
+    __table_args__ = (
+        Index("ix_swing_points_lookup", "dataset_id", "instrument_id", "timeframe_id", "ts"),
+    )
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
 
@@ -227,12 +253,14 @@ class Strategy(Base):
     htf_lookback_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=24)
     htf_confirmed_only: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
     require_htf_signal: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
+    dow_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="strategies")
     instrument: Mapped["Instrument"] = relationship()
     timeframe: Mapped["Timeframe"] = relationship(foreign_keys=[timeframe_id])
     htf_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[htf_timeframe_id])
+    dow_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[dow_timeframe_id])
     runs: Mapped[list["BacktestRun"]] = relationship(back_populates="strategy", cascade="all, delete-orphan")
 
     __table_args__ = (

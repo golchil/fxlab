@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade, Signal
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade, Signal, SwingPoint
 from app.config import settings as app_settings
 
 celery_app = Celery(
@@ -976,6 +976,64 @@ def backtest_task(
             )
             htf_signals = [r[0] for r in htf_signals_q]
 
+        # Dow Theory trend setup
+        dow_enabled = strategy.dow_timeframe_id is not None
+        swing_highs = []  # list of (ts, price)
+        swing_lows = []
+        if dow_enabled:
+            swings_q = (
+                db.query(SwingPoint.ts, SwingPoint.kind, SwingPoint.price)
+                .filter(
+                    SwingPoint.dataset_id == strategy.dataset_id,
+                    SwingPoint.instrument_id == strategy.instrument_id,
+                    SwingPoint.timeframe_id == strategy.dow_timeframe_id,
+                )
+                .order_by(SwingPoint.ts)
+                .all()
+            )
+            for ts, kind, price in swings_q:
+                if kind == "high":
+                    swing_highs.append((ts, price))
+                else:
+                    swing_lows.append((ts, price))
+
+        def compute_dow_trend(bar_ts):
+            """
+            Compute Dow Theory trend based on recent swing highs/lows.
+            Returns "up", "down", or "range".
+            - up: higher highs AND higher lows (last 2 pairs)
+            - down: lower highs AND lower lows
+            - range: otherwise
+            """
+            if not dow_enabled or not swing_highs or not swing_lows:
+                return "range"
+
+            import bisect
+            # Find swing points before bar_ts
+            h_idx = bisect.bisect_right([h[0] for h in swing_highs], bar_ts)
+            l_idx = bisect.bisect_right([l[0] for l in swing_lows], bar_ts)
+
+            recent_highs = swing_highs[:h_idx][-2:]  # Last 2 highs before bar_ts
+            recent_lows = swing_lows[:l_idx][-2:]    # Last 2 lows before bar_ts
+
+            if len(recent_highs) < 2 or len(recent_lows) < 2:
+                return "range"
+
+            h1, h2 = recent_highs[0][1], recent_highs[1][1]  # older, newer
+            l1, l2 = recent_lows[0][1], recent_lows[1][1]
+
+            higher_highs = h2 > h1
+            higher_lows = l2 > l1
+            lower_highs = h2 < h1
+            lower_lows = l2 < l1
+
+            if higher_highs and higher_lows:
+                return "up"
+            elif lower_highs and lower_lows:
+                return "down"
+            else:
+                return "range"
+
         def find_latest_htf_signal(bar_ts):
             """Find the most recent HTF signal before bar_ts within lookback window."""
             if not htf_signals:
@@ -1167,6 +1225,10 @@ def backtest_task(
                     return False
                 elif operator == "<=" and not (val <= threshold):
                     return False
+                elif operator == "==" and not (val == threshold):
+                    return False
+                elif operator == "!=" and not (val != threshold):
+                    return False
             return True
 
         # Pip size heuristic
@@ -1308,6 +1370,11 @@ def backtest_task(
                 if features is None:
                     cnt_bars_feature_missing += 1
                     continue
+
+                # Add dow_trend to features for rule evaluation
+                if dow_enabled:
+                    features = dict(features)  # Make a copy to avoid modifying cached dict
+                    features["dow_trend"] = compute_dow_trend(bar.ts)
 
                 if not evaluate_rules(features, rules):
                     continue
@@ -1682,6 +1749,234 @@ def resample_bars_task(
         db.commit()
 
         return {"generated_count": generated_count, "skipped_count": skipped_count}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+def zigzag_swing_detection(bars, threshold, min_bars=5):
+    """
+    ZigZagアルゴリズムでスイングハイ/ローを検出する。
+
+    Args:
+        bars: List of (ts, open, high, low, close) tuples
+        threshold: 最小反転幅（価格単位）
+        min_bars: 最小バー数（高値/安値間）
+
+    Returns:
+        List of (ts, kind, price) tuples where kind is "high" or "low"
+    """
+    if len(bars) < min_bars * 2:
+        return []
+
+    swings = []
+
+    # 初期化: 最初のmin_bars本から初期高値/安値を見つける
+    init_highs = [(b[2], b[0]) for b in bars[:min_bars]]  # (high, ts)
+    init_lows = [(b[3], b[0]) for b in bars[:min_bars]]   # (low, ts)
+
+    max_high = max(init_highs, key=lambda x: x[0])
+    min_low = min(init_lows, key=lambda x: x[0])
+
+    # 最初のスイングを決定
+    if max_high[0] - min_low[0] >= threshold:
+        if init_highs.index(max_high) < init_lows.index(min_low):
+            # 高値が先
+            last_swing = ("high", max_high[1], max_high[0])
+            swings.append((max_high[1], "high", max_high[0]))
+        else:
+            # 安値が先
+            last_swing = ("low", min_low[1], min_low[0])
+            swings.append((min_low[1], "low", min_low[0]))
+    else:
+        # しきい値未満なら高値から開始
+        last_swing = ("high", max_high[1], max_high[0])
+        swings.append((max_high[1], "high", max_high[0]))
+
+    # バーを走査
+    for i in range(min_bars, len(bars)):
+        bar = bars[i]
+        ts, open_, high, low, close = bar
+
+        if last_swing[0] == "high":
+            # 前回が高値 → 安値を探す
+            if high > last_swing[2]:
+                # より高い高値が出現 → 高値を更新
+                swings[-1] = (ts, "high", high)
+                last_swing = ("high", ts, high)
+            elif last_swing[2] - low >= threshold:
+                # しきい値以上の下落 → 新しい安値
+                swings.append((ts, "low", low))
+                last_swing = ("low", ts, low)
+        else:
+            # 前回が安値 → 高値を探す
+            if low < last_swing[2]:
+                # より低い安値が出現 → 安値を更新
+                swings[-1] = (ts, "low", low)
+                last_swing = ("low", ts, low)
+            elif high - last_swing[2] >= threshold:
+                # しきい値以上の上昇 → 新しい高値
+                swings.append((ts, "high", high))
+                last_swing = ("high", ts, high)
+
+    return swings
+
+
+@celery_app.task(bind=True)
+def generate_swings_task(
+    self, job_id: int, dataset_id: int,
+    timeframe: str,
+    method: str = "zigzag",
+    threshold_type: str = "atr",
+    threshold_value: float = 1.0,
+    min_bars: int = 5,
+    start_ts: str = None,
+    end_ts: str = None,
+    overwrite: bool = False
+):
+    """
+    ダウ理論のスイングハイ/ローを生成する。
+
+    Args:
+        method: "zigzag" (現在はこれのみ)
+        threshold_type: "atr" or "pips"
+        threshold_value: ATR倍率 or 固定pips
+        min_bars: 高値/安値間の最小バー数
+        overwrite: True なら既存を削除して再生成
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
+
+        tf = get_or_create_timeframe(db, timeframe)
+
+        # instrument はdataset内の最初のものを使用
+        first_bar = db.query(Bar).filter(Bar.dataset_id == dataset_id).first()
+        if not first_bar:
+            raise ValueError(f"No bars found in dataset {dataset_id}")
+        instrument = db.query(Instrument).filter(Instrument.id == first_bar.instrument_id).first()
+
+        # 既存チェック
+        existing = db.query(SwingPoint).filter(
+            SwingPoint.dataset_id == dataset_id,
+            SwingPoint.instrument_id == instrument.id,
+            SwingPoint.timeframe_id == tf.id,
+            SwingPoint.method == method,
+            SwingPoint.threshold_type == threshold_type,
+            SwingPoint.threshold_value == threshold_value,
+            SwingPoint.min_bars == min_bars,
+        ).first()
+
+        if existing and not overwrite:
+            job.status = "completed"
+            job.result = json.dumps({"status": "skipped", "message": "既存のswing_pointsがあります"})
+            db.commit()
+            return {"status": "skipped", "count": 0}
+
+        # 既存削除
+        if overwrite:
+            db.query(SwingPoint).filter(
+                SwingPoint.dataset_id == dataset_id,
+                SwingPoint.instrument_id == instrument.id,
+                SwingPoint.timeframe_id == tf.id,
+            ).delete()
+            db.commit()
+
+        # バー取得
+        query = db.query(Bar).filter(
+            Bar.dataset_id == dataset_id,
+            Bar.instrument_id == instrument.id,
+            Bar.timeframe_id == tf.id,
+        )
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end)
+
+        bars = query.order_by(Bar.ts).all()
+
+        if not bars:
+            job.status = "completed"
+            job.result = json.dumps({"status": "no_bars", "message": "バーが見つかりません"})
+            db.commit()
+            return {"status": "no_bars", "count": 0}
+
+        # しきい値計算
+        if threshold_type == "atr":
+            # ATR14を計算
+            highs = [b.high for b in bars]
+            lows = [b.low for b in bars]
+            closes = [b.close for b in bars]
+
+            tr_list = []
+            for i in range(1, min(15, len(bars))):
+                high_low = highs[i] - lows[i]
+                high_prev = abs(highs[i] - closes[i - 1])
+                low_prev = abs(lows[i] - closes[i - 1])
+                tr_list.append(max(high_low, high_prev, low_prev))
+
+            atr14 = sum(tr_list) / len(tr_list) if tr_list else 0.001
+            threshold = atr14 * threshold_value
+        else:
+            # pips
+            sample_close = bars[0].close
+            pip_size = 0.01 if sample_close > 50 else 0.0001
+            threshold = threshold_value * pip_size
+
+        # ZigZag実行
+        bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+        swings = zigzag_swing_detection(bar_data, threshold, min_bars)
+
+        # DB保存
+        swing_objs = []
+        for ts, kind, price in swings:
+            swing_objs.append(SwingPoint(
+                dataset_id=dataset_id,
+                instrument_id=instrument.id,
+                timeframe_id=tf.id,
+                ts=ts,
+                kind=kind,
+                price=price,
+                method=method,
+                threshold_type=threshold_type,
+                threshold_value=threshold_value,
+                min_bars=min_bars,
+            ))
+
+        if swing_objs:
+            db.bulk_save_objects(swing_objs)
+            db.commit()
+
+        result = {
+            "status": "completed",
+            "count": len(swing_objs),
+            "timeframe": timeframe,
+            "threshold_type": threshold_type,
+            "threshold_value": threshold_value,
+            "min_bars": min_bars,
+        }
+
+        job.status = "completed"
+        job.result = json.dumps(result)
+        db.commit()
+
+        return result
 
     except Exception as e:
         job = db.query(Job).filter(Job.id == job_id).first()
