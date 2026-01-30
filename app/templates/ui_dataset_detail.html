@@ -381,6 +381,83 @@
     </section>
 
     <section class="actions-section">
+        <h2>パターン検出（ダブルボトム/トップ）</h2>
+        <div class="stats-row" style="margin-bottom: 1rem;">
+            <div class="stat-box">
+                <h3>パターン統計</h3>
+                <div class="stat-content">
+                    <p><strong>件数:</strong> {{ patterns_stats.total_patterns }}</p>
+                    {% if patterns_stats.double_bottom_count %}
+                    <p><strong>ダブルボトム:</strong> {{ patterns_stats.double_bottom_count }}</p>
+                    <p><strong>ダブルトップ:</strong> {{ patterns_stats.double_top_count }}</p>
+                    {% endif %}
+                    {% if patterns_stats.timeframes %}
+                    <p><strong>時間足:</strong>
+                        {% for tf in patterns_stats.timeframes %}
+                        {{ tf }}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </p>
+                    {% endif %}
+                    {% if patterns_stats.total_patterns > 0 %}
+                    <p><a href="/ui/lab/patterns?dataset_id={{ dataset.id }}">パターン一覧を見る &rarr;</a></p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="forms-row">
+            <div class="form-box">
+                <h3>パターン検出</h3>
+                <p style="font-size: 0.85em; color: #666; margin-bottom: 1rem; background: #e3f2fd; padding: 0.5rem; border-radius: 4px;">
+                    <strong>未来参照なし</strong><br>
+                    パターンはネックラインブレイクを確認した時刻で確定。事前にスイングポイントの生成が必要です。
+                </p>
+                <form action="/ui/datasets/{{ dataset.id }}/patterns" method="post">
+                    <div class="form-group">
+                        <label for="pattern_timeframe">時間足</label>
+                        <select id="pattern_timeframe" name="timeframe">
+                            <option value="M15">M15（15分足）</option>
+                            <option value="H1" selected>H1（1時間足）</option>
+                            <option value="H4">H4（4時間足）</option>
+                            <option value="D1">D1（日足）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pattern_types">パターン種類</label>
+                        <select id="pattern_types" name="pattern_types">
+                            <option value="double_bottom,double_top" selected>両方</option>
+                            <option value="double_bottom">ダブルボトムのみ</option>
+                            <option value="double_top">ダブルトップのみ</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tolerance_pct">許容誤差（%）</label>
+                        <input type="number" id="tolerance_pct" name="tolerance_pct" value="0.02" step="0.01" required>
+                        <small style="color: #666;">左右の山/谷の価格差許容範囲</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="min_bars_between">最小バー間隔</label>
+                        <input type="number" id="min_bars_between" name="min_bars_between" value="5" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pattern_start_ts">開始日時（ISO8601、任意）</label>
+                        <input type="text" id="pattern_start_ts" name="start_ts" placeholder="2003-06-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label for="pattern_end_ts">終了日時（ISO8601、任意）</label>
+                        <input type="text" id="pattern_end_ts" name="end_ts" placeholder="2024-01-01T00:00:00Z">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="overwrite"> 既存データを上書き
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">パターン検出</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <section class="actions-section">
         <h2>シグナル生成</h2>
         <div class="forms-row">
             <div class="form-box">

@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore, TradeImage, SwingPoint
+from app.models import Dataset, Bar, Job, Window, Label, WindowImage, WindowFeature, Timeframe, Strategy, BacktestRun, Trade, Instrument, Signal, EntryPoint, MLModel, MLScore, TradeImage, SwingPoint, PatternInstance, PatternLabel
 from app.services.image_generator import generate_candlestick_image
 from app.services.minio_client import upload_image, get_image, image_exists
 from app.tasks import (
     import_csv_task, generate_windows_task, generate_labels_task,
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
-    golden_cross_task, generate_swings_task
+    golden_cross_task, generate_swings_task, detect_patterns_task
 )
 from app.tasks_ml import ml_train_task, ml_infer_task
 
@@ -306,6 +306,57 @@ def get_swings_stats(dataset_id: int, db: Session):
     }
 
 
+def get_patterns_stats(dataset_id: int, db: Session):
+    """Get pattern instances statistics for a dataset."""
+    total = db.query(func.count(PatternInstance.id)).filter(PatternInstance.dataset_id == dataset_id).scalar() or 0
+    double_bottom = db.query(func.count(PatternInstance.id)).filter(
+        PatternInstance.dataset_id == dataset_id, PatternInstance.pattern_type == "double_bottom"
+    ).scalar() or 0
+    double_top = db.query(func.count(PatternInstance.id)).filter(
+        PatternInstance.dataset_id == dataset_id, PatternInstance.pattern_type == "double_top"
+    ).scalar() or 0
+
+    # ユニークな時間足リスト
+    tf_names = (
+        db.query(Timeframe.name)
+        .join(PatternInstance, PatternInstance.timeframe_id == Timeframe.id)
+        .filter(PatternInstance.dataset_id == dataset_id)
+        .distinct()
+        .all()
+    )
+    timeframes = [tf[0] for tf in tf_names]
+
+    # グループ化: timeframe, pattern_type
+    groups = (
+        db.query(
+            Timeframe.name,
+            PatternInstance.pattern_type,
+            func.count(PatternInstance.id),
+        )
+        .join(Timeframe, Timeframe.id == PatternInstance.timeframe_id)
+        .filter(PatternInstance.dataset_id == dataset_id)
+        .group_by(Timeframe.name, PatternInstance.pattern_type)
+        .all()
+    )
+
+    pattern_groups = [
+        {
+            "timeframe": tf_name,
+            "pattern_type": pt,
+            "count": cnt,
+        }
+        for tf_name, pt, cnt in groups
+    ]
+
+    return {
+        "total_patterns": total,
+        "double_bottom_count": double_bottom,
+        "double_top_count": double_top,
+        "timeframes": timeframes,
+        "pattern_groups": pattern_groups,
+    }
+
+
 def parse_optional_datetime(value: str) -> Optional[datetime]:
     """Parse optional ISO8601 datetime string."""
     if not value or value.strip() == "":
@@ -350,6 +401,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
     features_stats = get_features_stats(dataset_id, db)
     signals_stats = get_signals_stats(dataset_id, db)
     swings_stats = get_swings_stats(dataset_id, db)
+    patterns_stats = get_patterns_stats(dataset_id, db)
     timeframes = get_timeframe_info(dataset_id, db)
 
     return templates.TemplateResponse("ui_dataset_detail.html", {
@@ -361,6 +413,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "features_stats": features_stats,
         "signals_stats": signals_stats,
         "swings_stats": swings_stats,
+        "patterns_stats": patterns_stats,
         "timeframes": timeframes,
     })
 
@@ -857,6 +910,7 @@ def ui_create_golden_cross(
             "features_stats": get_features_stats(dataset_id, db),
             "signals_stats": get_signals_stats(dataset_id, db),
             "swings_stats": get_swings_stats(dataset_id, db),
+            "patterns_stats": get_patterns_stats(dataset_id, db),
             "timeframes": get_timeframe_info(dataset_id, db),
             "error": str(e),
         })
@@ -932,6 +986,85 @@ def ui_create_swings(
             "features_stats": get_features_stats(dataset_id, db),
             "signals_stats": get_signals_stats(dataset_id, db),
             "swings_stats": get_swings_stats(dataset_id, db),
+            "patterns_stats": get_patterns_stats(dataset_id, db),
+            "timeframes": get_timeframe_info(dataset_id, db),
+            "error": str(e),
+        })
+
+
+@router.post("/datasets/{dataset_id}/patterns")
+def ui_create_patterns(
+    request: Request,
+    dataset_id: int,
+    timeframe: str = Form("H1"),
+    pattern_types: list = Form(["double_bottom", "double_top"]),
+    tolerance_pct: float = Form(0.02),
+    min_bars_between: int = Form(5),
+    overwrite: Optional[str] = Form(None),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create pattern detection job (double bottom/top)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        return RedirectResponse(url="/ui/datasets", status_code=303)
+
+    try:
+        start_ts_val = parse_optional_datetime(start_ts) if start_ts else None
+        end_ts_val = parse_optional_datetime(end_ts) if end_ts else None
+        overwrite_flag = overwrite == "on"
+
+        # Handle pattern_types from form (may be comma-separated string or list)
+        if isinstance(pattern_types, str):
+            pattern_types = [pt.strip() for pt in pattern_types.split(",") if pt.strip()]
+
+        params = {
+            "timeframe": timeframe,
+            "pattern_types": pattern_types,
+            "tolerance_pct": tolerance_pct,
+            "min_bars_between": min_bars_between,
+            "overwrite": overwrite_flag,
+            "start_ts": start_ts_val.isoformat() if start_ts_val else None,
+            "end_ts": end_ts_val.isoformat() if end_ts_val else None,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="patterns",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        detect_patterns_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            timeframe=timeframe,
+            pattern_types=pattern_types,
+            tolerance_pct=tolerance_pct,
+            min_bars_between=min_bars_between,
+            start_ts=start_ts_val.isoformat() if start_ts_val else None,
+            end_ts=end_ts_val.isoformat() if end_ts_val else None,
+            overwrite=overwrite_flag,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        dataset_data = get_dataset_response(dataset, db)
+        return templates.TemplateResponse("ui_dataset_detail.html", {
+            "request": request,
+            "dataset": dataset_data,
+            "windows_stats": get_windows_stats(dataset_id, db),
+            "labels_stats": get_labels_stats(dataset_id, db),
+            "images_stats": get_images_stats(dataset_id, db),
+            "features_stats": get_features_stats(dataset_id, db),
+            "signals_stats": get_signals_stats(dataset_id, db),
+            "swings_stats": get_swings_stats(dataset_id, db),
+            "patterns_stats": get_patterns_stats(dataset_id, db),
             "timeframes": get_timeframe_info(dataset_id, db),
             "error": str(e),
         })
@@ -2714,3 +2847,163 @@ def ui_trade_range_image(trade_id: int, db: Session = Depends(get_db)):
         return Response(content=image_bytes, media_type="image/png")
     except Exception:
         return Response(content=b"", status_code=404)
+
+
+# === Pattern Routes ===
+
+@router.get("/lab/patterns", response_class=HTMLResponse)
+def ui_lab_patterns(
+    request: Request,
+    dataset_id: Optional[int] = None,
+    timeframe: Optional[str] = None,
+    pattern_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Pattern instances listing page."""
+    datasets = db.query(Dataset).all()
+    dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
+
+    # Get available timeframes for selected dataset
+    timeframes = []
+    if dataset_id:
+        tf_names = (
+            db.query(Timeframe.name)
+            .join(PatternInstance, PatternInstance.timeframe_id == Timeframe.id)
+            .filter(PatternInstance.dataset_id == dataset_id)
+            .distinct()
+            .all()
+        )
+        timeframes = [tf[0] for tf in tf_names]
+
+    patterns = []
+    if dataset_id:
+        query = db.query(PatternInstance).filter(PatternInstance.dataset_id == dataset_id)
+        if timeframe:
+            tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
+            if tf:
+                query = query.filter(PatternInstance.timeframe_id == tf.id)
+        if pattern_type:
+            query = query.filter(PatternInstance.pattern_type == pattern_type)
+        patterns = query.order_by(PatternInstance.confirmed_ts.desc()).limit(200).all()
+
+    return templates.TemplateResponse("ui_lab_patterns.html", {
+        "request": request,
+        "datasets": dataset_list,
+        "timeframes": timeframes,
+        "patterns": patterns,
+        "selected_dataset_id": dataset_id,
+        "selected_timeframe": timeframe or "",
+        "selected_pattern_type": pattern_type or "",
+    })
+
+
+@router.get("/lab/patterns/data")
+def ui_lab_patterns_data(
+    dataset_id: int,
+    timeframe: str = "H1",
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """JSON API: pattern instances for chart overlay."""
+    tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
+    if not tf:
+        return JSONResponse({"patterns": []})
+
+    first_bar = db.query(Bar.instrument_id).filter(Bar.dataset_id == dataset_id).first()
+    if not first_bar:
+        return JSONResponse({"patterns": []})
+    instrument_id = first_bar[0]
+
+    query = db.query(PatternInstance).filter(
+        PatternInstance.dataset_id == dataset_id,
+        PatternInstance.instrument_id == instrument_id,
+        PatternInstance.timeframe_id == tf.id,
+    )
+    if start_ts:
+        query = query.filter(PatternInstance.confirmed_ts >= parse_optional_datetime(start_ts))
+    if end_ts:
+        query = query.filter(PatternInstance.confirmed_ts <= parse_optional_datetime(end_ts))
+
+    patterns = query.order_by(PatternInstance.confirmed_ts).limit(500).all()
+
+    pattern_data = []
+    for p in patterns:
+        left_unix = int(p.left_ts.replace(tzinfo=timezone.utc).timestamp())
+        right_unix = int(p.right_ts.replace(tzinfo=timezone.utc).timestamp())
+        neckline_unix = int(p.neckline_ts.replace(tzinfo=timezone.utc).timestamp())
+        confirmed_unix = int(p.confirmed_ts.replace(tzinfo=timezone.utc).timestamp())
+
+        pattern_data.append({
+            "id": p.id,
+            "pattern_type": p.pattern_type,
+            "left_time": left_unix,
+            "right_time": right_unix,
+            "neckline_time": neckline_unix,
+            "confirmed_time": confirmed_unix,
+            "left_price": p.left_price,
+            "right_price": p.right_price,
+            "neckline_price": p.neckline_price,
+            "rule_score": p.rule_score,
+            "ml_score": p.ml_score,
+        })
+
+    return JSONResponse({"patterns": pattern_data})
+
+
+@router.get("/lab/patterns/{pattern_id}", response_class=HTMLResponse)
+def ui_lab_pattern_detail(
+    request: Request,
+    pattern_id: int,
+    db: Session = Depends(get_db),
+):
+    """Pattern detail page with dual-chart display (HTF + LTF)."""
+    pattern = db.query(PatternInstance).filter(PatternInstance.id == pattern_id).first()
+    if not pattern:
+        return RedirectResponse(url="/ui/lab/patterns", status_code=303)
+
+    dataset = db.query(Dataset).filter(Dataset.id == pattern.dataset_id).first()
+    instrument = db.query(Instrument).filter(Instrument.id == pattern.instrument_id).first()
+    timeframe = db.query(Timeframe).filter(Timeframe.id == pattern.timeframe_id).first()
+
+    # Get labels for this pattern
+    labels = db.query(PatternLabel).filter(PatternLabel.pattern_id == pattern_id).all()
+
+    # Available LTF options for M5 view
+    ltf_options = ["M1", "M5", "M15", "M30"]
+
+    return templates.TemplateResponse("ui_lab_pattern_detail.html", {
+        "request": request,
+        "pattern": pattern,
+        "dataset": dataset,
+        "instrument": instrument,
+        "timeframe": timeframe,
+        "labels": labels,
+        "ltf_options": ltf_options,
+    })
+
+
+@router.post("/lab/patterns/{pattern_id}/label")
+def ui_lab_pattern_label(
+    pattern_id: int,
+    data: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """AJAX: Add label to pattern."""
+    pattern = db.query(PatternInstance).filter(PatternInstance.id == pattern_id).first()
+    if not pattern:
+        return JSONResponse({"error": "Pattern not found"}, status_code=404)
+
+    label_val = data.get("label", "unknown")
+    note = data.get("note")
+
+    pl = PatternLabel(
+        pattern_id=pattern_id,
+        label=label_val,
+        note=note,
+    )
+    db.add(pl)
+    db.commit()
+    db.refresh(pl)
+
+    return JSONResponse({"id": pl.id, "label": label_val, "note": note})

@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade, Signal, SwingPoint
+from app.models import Dataset, Instrument, Timeframe, Bar, Job, Window, Label, WindowImage, WindowFeature, Strategy, BacktestRun, Trade, Signal, SwingPoint, PatternInstance
 from app.config import settings as app_settings
 
 celery_app = Celery(
@@ -1983,6 +1983,324 @@ def generate_swings_task(
             "threshold_type": threshold_type,
             "threshold_value": threshold_value,
             "min_bars": min_bars,
+        }
+
+        job.status = "completed"
+        job.result = json.dumps(result)
+        db.commit()
+
+        return result
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+def detect_double_patterns(bars, swing_highs, swing_lows, tolerance_pct=0.02, min_bars_between=5):
+    """
+    ダブルトップ/ダブルボトムのパターンを検出する（未来参照なし）。
+
+    Args:
+        bars: List of (ts, open, high, low, close) tuples, sorted by ts
+        swing_highs: List of (confirmed_ts, price, ts) tuples for swing highs
+        swing_lows: List of (confirmed_ts, price, ts) tuples for swing lows
+        tolerance_pct: 左右の山/谷の価格差許容範囲（価格の%）
+        min_bars_between: 左右の山/谷間の最小バー数
+
+    Returns:
+        List of pattern dicts:
+        {
+            pattern_type: "double_bottom" or "double_top",
+            left_ts, right_ts, neckline_ts,
+            left_price, right_price, neckline_price,
+            confirmed_ts: ネックラインブレイク確認時刻
+        }
+    """
+    import bisect
+
+    patterns = []
+    bar_timestamps = [b[0] for b in bars]
+    bar_highs = {b[0]: b[2] for b in bars}
+    bar_lows = {b[0]: b[3] for b in bars}
+
+    # ダブルボトム検出: 2つの連続した安値（間に高値）
+    for i in range(len(swing_lows) - 1):
+        left_confirmed, left_price, left_ts = swing_lows[i]
+        right_confirmed, right_price, right_ts = swing_lows[i + 1]
+
+        # 左右の安値が近似しているか
+        avg_price = (left_price + right_price) / 2
+        if avg_price == 0:
+            continue
+        price_diff_pct = abs(left_price - right_price) / avg_price
+        if price_diff_pct > tolerance_pct:
+            continue
+
+        # バー数チェック
+        left_idx = bisect.bisect_left(bar_timestamps, left_ts)
+        right_idx = bisect.bisect_left(bar_timestamps, right_ts)
+        if right_idx - left_idx < min_bars_between:
+            continue
+
+        # 間のネックライン（高値）を探す
+        neckline_high = None
+        for h_confirmed, h_price, h_ts in swing_highs:
+            if left_ts < h_ts < right_ts:
+                if neckline_high is None or h_price > neckline_high[1]:
+                    neckline_high = (h_confirmed, h_price, h_ts)
+
+        if neckline_high is None:
+            continue
+
+        neckline_confirmed, neckline_price, neckline_ts = neckline_high
+
+        # ネックラインブレイクを探す（right_confirmedより後のバーで）
+        confirmed_ts = None
+        search_start = bisect.bisect_right(bar_timestamps, right_confirmed)
+        for j in range(search_start, len(bars)):
+            bar_ts = bars[j][0]
+            if bar_highs.get(bar_ts, 0) > neckline_price:
+                confirmed_ts = bar_ts
+                break
+
+        if confirmed_ts is None:
+            continue  # まだブレイクしていない
+
+        patterns.append({
+            "pattern_type": "double_bottom",
+            "left_ts": left_ts,
+            "right_ts": right_ts,
+            "neckline_ts": neckline_ts,
+            "left_price": left_price,
+            "right_price": right_price,
+            "neckline_price": neckline_price,
+            "confirmed_ts": confirmed_ts,
+        })
+
+    # ダブルトップ検出: 2つの連続した高値（間に安値）
+    for i in range(len(swing_highs) - 1):
+        left_confirmed, left_price, left_ts = swing_highs[i]
+        right_confirmed, right_price, right_ts = swing_highs[i + 1]
+
+        # 左右の高値が近似しているか
+        avg_price = (left_price + right_price) / 2
+        if avg_price == 0:
+            continue
+        price_diff_pct = abs(left_price - right_price) / avg_price
+        if price_diff_pct > tolerance_pct:
+            continue
+
+        # バー数チェック
+        left_idx = bisect.bisect_left(bar_timestamps, left_ts)
+        right_idx = bisect.bisect_left(bar_timestamps, right_ts)
+        if right_idx - left_idx < min_bars_between:
+            continue
+
+        # 間のネックライン（安値）を探す
+        neckline_low = None
+        for l_confirmed, l_price, l_ts in swing_lows:
+            if left_ts < l_ts < right_ts:
+                if neckline_low is None or l_price < neckline_low[1]:
+                    neckline_low = (l_confirmed, l_price, l_ts)
+
+        if neckline_low is None:
+            continue
+
+        neckline_confirmed, neckline_price, neckline_ts = neckline_low
+
+        # ネックラインブレイクを探す（right_confirmedより後のバーで）
+        confirmed_ts = None
+        search_start = bisect.bisect_right(bar_timestamps, right_confirmed)
+        for j in range(search_start, len(bars)):
+            bar_ts = bars[j][0]
+            if bar_lows.get(bar_ts, 0) < neckline_price:
+                confirmed_ts = bar_ts
+                break
+
+        if confirmed_ts is None:
+            continue  # まだブレイクしていない
+
+        patterns.append({
+            "pattern_type": "double_top",
+            "left_ts": left_ts,
+            "right_ts": right_ts,
+            "neckline_ts": neckline_ts,
+            "left_price": left_price,
+            "right_price": right_price,
+            "neckline_price": neckline_price,
+            "confirmed_ts": confirmed_ts,
+        })
+
+    return patterns
+
+
+@celery_app.task(bind=True)
+def detect_patterns_task(
+    self, job_id: int, dataset_id: int,
+    timeframe: str,
+    pattern_types: list = None,  # ["double_bottom", "double_top"]
+    tolerance_pct: float = 0.02,
+    min_bars_between: int = 5,
+    start_ts: str = None,
+    end_ts: str = None,
+    overwrite: bool = False
+):
+    """
+    チャートパターン（ダブルボトム/ダブルトップ）を検出する。
+
+    Args:
+        pattern_types: 検出するパターンタイプのリスト（デフォルト: 両方）
+        tolerance_pct: 左右の山/谷の価格差許容範囲（デフォルト: 2%）
+        min_bars_between: 左右間の最小バー数
+        overwrite: True なら既存を削除して再生成
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
+
+        tf = get_or_create_timeframe(db, timeframe)
+
+        # instrument はdataset内の最初のものを使用
+        first_bar = db.query(Bar).filter(Bar.dataset_id == dataset_id).first()
+        if not first_bar:
+            raise ValueError(f"No bars found in dataset {dataset_id}")
+        instrument = db.query(Instrument).filter(Instrument.id == first_bar.instrument_id).first()
+
+        if pattern_types is None:
+            pattern_types = ["double_bottom", "double_top"]
+
+        # 既存削除
+        if overwrite:
+            for pt in pattern_types:
+                db.query(PatternInstance).filter(
+                    PatternInstance.dataset_id == dataset_id,
+                    PatternInstance.instrument_id == instrument.id,
+                    PatternInstance.timeframe_id == tf.id,
+                    PatternInstance.pattern_type == pt,
+                ).delete()
+            db.commit()
+
+        # スイングポイント取得
+        swings_q = (
+            db.query(SwingPoint.confirmed_ts, SwingPoint.kind, SwingPoint.price, SwingPoint.ts)
+            .filter(
+                SwingPoint.dataset_id == dataset_id,
+                SwingPoint.instrument_id == instrument.id,
+                SwingPoint.timeframe_id == tf.id,
+            )
+            .order_by(SwingPoint.ts)
+            .all()
+        )
+
+        if not swings_q:
+            job.status = "completed"
+            job.result = json.dumps({"status": "no_swings", "message": "スイングポイントがありません。先に生成してください。"})
+            db.commit()
+            return {"status": "no_swings", "count": 0}
+
+        swing_highs = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "high"]
+        swing_lows = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "low"]
+
+        # バー取得
+        query = db.query(Bar).filter(
+            Bar.dataset_id == dataset_id,
+            Bar.instrument_id == instrument.id,
+            Bar.timeframe_id == tf.id,
+        )
+        if start_ts:
+            filter_start = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts >= filter_start)
+        if end_ts:
+            filter_end = datetime.fromisoformat(end_ts.replace('Z', '+00:00'))
+            query = query.filter(Bar.ts <= filter_end)
+
+        bars = query.order_by(Bar.ts).all()
+
+        if not bars:
+            job.status = "completed"
+            job.result = json.dumps({"status": "no_bars", "message": "バーが見つかりません"})
+            db.commit()
+            return {"status": "no_bars", "count": 0}
+
+        bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+        # パターン検出
+        detected = detect_double_patterns(
+            bar_data,
+            swing_highs,
+            swing_lows,
+            tolerance_pct=tolerance_pct,
+            min_bars_between=min_bars_between,
+        )
+
+        # フィルタ: 指定されたパターンタイプのみ
+        detected = [p for p in detected if p["pattern_type"] in pattern_types]
+
+        # DB保存
+        params_json = json.dumps({
+            "tolerance_pct": tolerance_pct,
+            "min_bars_between": min_bars_between,
+        })
+
+        pattern_objs = []
+        for p in detected:
+            # 重複チェック
+            existing = db.query(PatternInstance).filter(
+                PatternInstance.dataset_id == dataset_id,
+                PatternInstance.instrument_id == instrument.id,
+                PatternInstance.timeframe_id == tf.id,
+                PatternInstance.pattern_type == p["pattern_type"],
+                PatternInstance.left_ts == p["left_ts"],
+                PatternInstance.right_ts == p["right_ts"],
+            ).first()
+
+            if existing and not overwrite:
+                continue
+
+            pattern_objs.append(PatternInstance(
+                dataset_id=dataset_id,
+                instrument_id=instrument.id,
+                timeframe_id=tf.id,
+                pattern_type=p["pattern_type"],
+                left_ts=p["left_ts"],
+                right_ts=p["right_ts"],
+                neckline_ts=p["neckline_ts"],
+                left_price=p["left_price"],
+                right_price=p["right_price"],
+                neckline_price=p["neckline_price"],
+                confirmed_ts=p["confirmed_ts"],
+                params_json=params_json,
+            ))
+
+        if pattern_objs:
+            db.bulk_save_objects(pattern_objs)
+            db.commit()
+
+        count_by_type = {}
+        for p in detected:
+            pt = p["pattern_type"]
+            count_by_type[pt] = count_by_type.get(pt, 0) + 1
+
+        result = {
+            "status": "completed",
+            "count": len(pattern_objs),
+            "count_by_type": count_by_type,
+            "timeframe": timeframe,
+            "tolerance_pct": tolerance_pct,
+            "min_bars_between": min_bars_between,
         }
 
         job.status = "completed"

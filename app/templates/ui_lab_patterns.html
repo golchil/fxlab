@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - パターン一覧{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>パターン一覧 (Double Bottom / Top)</h1>
+        <a href="/ui/lab{% if selected_dataset_id %}?dataset_id={{ selected_dataset_id }}{% endif %}" class="btn">&larr; 実験室に戻る</a>
+    </div>
+
+    <form method="get" action="/ui/lab/patterns" class="lab-selector">
+        <div class="form-group">
+            <label for="dataset_id">データセット</label>
+            <select id="dataset_id" name="dataset_id" required onchange="this.form.submit()">
+                <option value="">選択...</option>
+                {% for ds in datasets %}
+                <option value="{{ ds.id }}" {{ "selected" if ds.id == selected_dataset_id }}>{{ ds.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="timeframe">時間足</label>
+            <select id="timeframe" name="timeframe">
+                <option value="">全て</option>
+                {% for tf in timeframes %}
+                <option value="{{ tf }}" {{ "selected" if selected_timeframe == tf }}>{{ tf }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="pattern_type">パターン種類</label>
+            <select id="pattern_type" name="pattern_type">
+                <option value="">全て</option>
+                <option value="double_bottom" {{ "selected" if selected_pattern_type == "double_bottom" }}>ダブルボトム</option>
+                <option value="double_top" {{ "selected" if selected_pattern_type == "double_top" }}>ダブルトップ</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">フィルタ</button>
+    </form>
+
+    {% if patterns %}
+    <section class="info-section">
+        <h2>{{ patterns | length }} 件</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>パターン</th>
+                    <th>確定時刻</th>
+                    <th>左</th>
+                    <th>右</th>
+                    <th>ネックライン</th>
+                    <th>スコア</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in patterns %}
+                <tr>
+                    <td>{{ p.id }}</td>
+                    <td>
+                        {% if p.pattern_type == "double_bottom" %}
+                        <span style="color: var(--success); font-weight: 500;">W (ダブルボトム)</span>
+                        {% else %}
+                        <span style="color: var(--danger); font-weight: 500;">M (ダブルトップ)</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ p.confirmed_ts.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ "%.5f"|format(p.left_price) }}</td>
+                    <td>{{ "%.5f"|format(p.right_price) }}</td>
+                    <td>{{ "%.5f"|format(p.neckline_price) }}</td>
+                    <td>
+                        {% if p.rule_score %}
+                        R: {{ "%.2f"|format(p.rule_score) }}
+                        {% endif %}
+                        {% if p.ml_score %}
+                        ML: {{ "%.2f"|format(p.ml_score) }}
+                        {% endif %}
+                        {% if not p.rule_score and not p.ml_score %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="/ui/lab/patterns/{{ p.id }}" class="btn btn-sm">詳細</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% elif selected_dataset_id %}
+    <p class="empty-state">パターンがありません。データセット詳細ページからパターン検出を実行してください。</p>
+    {% endif %}
+</div>
+{% endblock %}

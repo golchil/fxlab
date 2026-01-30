@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+
+{% block title %}FXLab - パターン詳細 #{{ pattern.id }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header-row">
+        <h1>
+            {% if pattern.pattern_type == "double_bottom" %}
+            W (ダブルボトム)
+            {% else %}
+            M (ダブルトップ)
+            {% endif %}
+            - {{ timeframe.name }}
+        </h1>
+        <a href="/ui/lab/patterns?dataset_id={{ dataset.id }}" class="btn">&larr; パターン一覧</a>
+    </div>
+
+    <section class="info-section">
+        <h2>パターン情報</h2>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">データセット</span>
+                <span class="stat-value">{{ dataset.name }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">通貨ペア</span>
+                <span class="stat-value">{{ instrument.symbol }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">時間足</span>
+                <span class="stat-value">{{ timeframe.name }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">確定時刻</span>
+                <span class="stat-value">{{ pattern.confirmed_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">左側 ({{ pattern.left_ts.strftime('%Y-%m-%d %H:%M') }})</span>
+                <span class="stat-value">{{ "%.5f"|format(pattern.left_price) }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">右側 ({{ pattern.right_ts.strftime('%Y-%m-%d %H:%M') }})</span>
+                <span class="stat-value">{{ "%.5f"|format(pattern.right_price) }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">ネックライン ({{ pattern.neckline_ts.strftime('%Y-%m-%d %H:%M') }})</span>
+                <span class="stat-value">{{ "%.5f"|format(pattern.neckline_price) }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">価格差</span>
+                <span class="stat-value">{{ "%.5f"|format((pattern.left_price - pattern.right_price)|abs) }}</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- HTF Chart -->
+    <section class="info-section">
+        <h2>{{ timeframe.name }} チャート (パターン全体)</h2>
+        <div class="lab-chart-container">
+            <div id="htfChart" style="height: 400px;"></div>
+        </div>
+    </section>
+
+    <!-- LTF Chart (Lower Timeframe) -->
+    <section class="info-section">
+        <h2>
+            <label for="ltfSelect">LTF チャート (ブレイクアウト詳細)</label>
+            <select id="ltfSelect" onchange="loadLTFChart()" style="margin-left: 1rem;">
+                {% for ltf in ltf_options %}
+                <option value="{{ ltf }}" {{ "selected" if ltf == "M5" }}>{{ ltf }}</option>
+                {% endfor %}
+            </select>
+        </h2>
+        <div class="lab-chart-container">
+            <div id="ltfChart" style="height: 400px;"></div>
+        </div>
+    </section>
+
+    <!-- Labels Section -->
+    <section class="info-section">
+        <h2>ラベル・評価</h2>
+        <div class="panel-buttons" style="margin-bottom: 1rem;">
+            <button class="btn btn-good" onclick="addLabel('good')">Good (良いパターン)</button>
+            <button class="btn btn-bad" onclick="addLabel('bad')">Bad (悪いパターン)</button>
+        </div>
+        <table id="labelsTable">
+            <thead>
+                <tr>
+                    <th>ラベル</th>
+                    <th>メモ</th>
+                    <th>登録日</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in labels %}
+                <tr>
+                    <td>
+                        {% if l.label == "good" %}
+                        <span class="label-badge label-tp_hit">Good</span>
+                        {% else %}
+                        <span class="label-badge label-sl_hit">Bad</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ l.note or "-" }}</td>
+                    <td>{{ l.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Scores -->
+    <section class="info-section">
+        <h2>スコア</h2>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">ルールベーススコア</span>
+                <span class="stat-value">{{ "%.2f"|format(pattern.rule_score) if pattern.rule_score else "-" }}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">MLスコア</span>
+                <span class="stat-value">{{ "%.2f"|format(pattern.ml_score) if pattern.ml_score else "-" }}</span>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const patternId = {{ pattern.id }};
+const datasetId = {{ dataset.id }};
+const htfTimeframe = "{{ timeframe.name }}";
+
+// Pattern key timestamps (UNIX seconds)
+const leftTs = {{ pattern.left_ts.timestamp()|int }};
+const rightTs = {{ pattern.right_ts.timestamp()|int }};
+const necklineTs = {{ pattern.neckline_ts.timestamp()|int }};
+const confirmedTs = {{ pattern.confirmed_ts.timestamp()|int }};
+const leftPrice = {{ pattern.left_price }};
+const rightPrice = {{ pattern.right_price }};
+const necklinePrice = {{ pattern.neckline_price }};
+const patternType = "{{ pattern.pattern_type }}";
+
+let htfChart, ltfChart;
+let htfSeries, ltfSeries;
+
+// HTF Chart
+function initHTFChart() {
+    const container = document.getElementById('htfChart');
+    htfChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 400,
+        layout: { background: { color: '#1a1a2e' }, textColor: '#e0e0e0' },
+        grid: { vertLines: { color: '#2a2a3e' }, horzLines: { color: '#2a2a3e' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    htfSeries = htfChart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+        borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+    loadHTFData();
+}
+
+function loadHTFData() {
+    // Load data around the pattern (e.g., from left-50 bars to confirmed+20 bars)
+    const padBefore = 3600 * 24 * 7;  // 7 days before
+    const padAfter = 3600 * 24 * 3;   // 3 days after
+    const startTs = new Date((leftTs - padBefore) * 1000).toISOString();
+    const endTs = new Date((confirmedTs + padAfter) * 1000).toISOString();
+
+    fetch(`/ui/lab/bars?dataset_id=${datasetId}&timeframe=${htfTimeframe}&start_ts=${startTs}&end_ts=${endTs}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.bars && data.bars.length > 0) {
+                htfSeries.setData(data.bars);
+                addPatternMarkers(htfSeries);
+                addNecklineLine();
+            }
+        });
+}
+
+function addPatternMarkers(series) {
+    const markers = [];
+
+    // Left point
+    markers.push({
+        time: leftTs,
+        position: patternType === 'double_bottom' ? 'belowBar' : 'aboveBar',
+        color: '#ffeb3b',
+        shape: 'circle',
+        text: 'L',
+    });
+
+    // Right point
+    markers.push({
+        time: rightTs,
+        position: patternType === 'double_bottom' ? 'belowBar' : 'aboveBar',
+        color: '#ffeb3b',
+        shape: 'circle',
+        text: 'R',
+    });
+
+    // Neckline
+    markers.push({
+        time: necklineTs,
+        position: patternType === 'double_bottom' ? 'aboveBar' : 'belowBar',
+        color: '#2196f3',
+        shape: 'circle',
+        text: 'N',
+    });
+
+    // Confirmed (breakout)
+    markers.push({
+        time: confirmedTs,
+        position: patternType === 'double_bottom' ? 'aboveBar' : 'belowBar',
+        color: '#4caf50',
+        shape: 'arrowUp',
+        text: 'Break',
+    });
+
+    series.setMarkers(markers);
+}
+
+function addNecklineLine() {
+    const necklineSeries = htfChart.addLineSeries({
+        color: '#2196f3',
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+    });
+
+    necklineSeries.setData([
+        { time: leftTs, value: necklinePrice },
+        { time: confirmedTs, value: necklinePrice },
+    ]);
+}
+
+// LTF Chart
+function initLTFChart() {
+    const container = document.getElementById('ltfChart');
+    ltfChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 400,
+        layout: { background: { color: '#1a1a2e' }, textColor: '#e0e0e0' },
+        grid: { vertLines: { color: '#2a2a3e' }, horzLines: { color: '#2a2a3e' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    ltfSeries = ltfChart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350',
+        borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+    loadLTFChart();
+}
+
+function loadLTFChart() {
+    const ltfTimeframe = document.getElementById('ltfSelect').value;
+
+    // Load data around the breakout point
+    const padBefore = 3600 * 6;   // 6 hours before neckline
+    const padAfter = 3600 * 6;    // 6 hours after confirmed
+    const startTs = new Date((necklineTs - padBefore) * 1000).toISOString();
+    const endTs = new Date((confirmedTs + padAfter) * 1000).toISOString();
+
+    fetch(`/ui/lab/bars?dataset_id=${datasetId}&timeframe=${ltfTimeframe}&start_ts=${startTs}&end_ts=${endTs}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.bars && data.bars.length > 0) {
+                ltfSeries.setData(data.bars);
+
+                // Add neckline on LTF
+                const ltfNeckline = ltfChart.addLineSeries({
+                    color: '#2196f3',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                const firstTime = data.bars[0].time;
+                const lastTime = data.bars[data.bars.length - 1].time;
+                ltfNeckline.setData([
+                    { time: firstTime, value: necklinePrice },
+                    { time: lastTime, value: necklinePrice },
+                ]);
+
+                // Add breakout marker
+                ltfSeries.setMarkers([{
+                    time: confirmedTs,
+                    position: patternType === 'double_bottom' ? 'aboveBar' : 'belowBar',
+                    color: '#4caf50',
+                    shape: 'arrowUp',
+                    text: 'Breakout',
+                }]);
+            }
+        });
+}
+
+function addLabel(labelValue) {
+    const note = prompt('メモ (任意):');
+    fetch(`/ui/lab/patterns/${patternId}/label`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: labelValue, note: note || null }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.id) {
+            const tbody = document.querySelector('#labelsTable tbody');
+            const row = document.createElement('tr');
+            const badgeClass = labelValue === 'good' ? 'label-tp_hit' : 'label-sl_hit';
+            row.innerHTML = `
+                <td><span class="label-badge ${badgeClass}">${labelValue === 'good' ? 'Good' : 'Bad'}</span></td>
+                <td>${data.note || '-'}</td>
+                <td>今</td>
+            `;
+            tbody.prepend(row);
+        }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+
+// Window resize handler
+window.addEventListener('resize', () => {
+    if (htfChart) {
+        htfChart.applyOptions({ width: document.getElementById('htfChart').clientWidth });
+    }
+    if (ltfChart) {
+        ltfChart.applyOptions({ width: document.getElementById('ltfChart').clientWidth });
+    }
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    initHTFChart();
+    initLTFChart();
+});
+</script>
+{% endblock %}

@@ -27,6 +27,7 @@ class Dataset(Base):
     strategies: Mapped[list["Strategy"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     signals: Mapped[list["Signal"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
     entry_points: Mapped[list["EntryPoint"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+    pattern_instances: Mapped[list["PatternInstance"]] = relationship(cascade="all, delete-orphan")
 
 
 class Instrument(Base):
@@ -256,6 +257,15 @@ class Strategy(Base):
     htf_confirmed_only: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
     require_htf_signal: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
     dow_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
+    # MTFパターン: HTF (Higher TimeFrame) パターン設定
+    htf_pattern_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
+    htf_pattern_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # "double_bottom", "double_top"
+    htf_pattern_lookback_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # MTFパターン: LTF (Lower TimeFrame) パターン設定
+    ltf_pattern_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
+    ltf_pattern_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    ltf_pattern_lookback_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    require_ltf_breakout: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="strategies")
@@ -263,6 +273,8 @@ class Strategy(Base):
     timeframe: Mapped["Timeframe"] = relationship(foreign_keys=[timeframe_id])
     htf_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[htf_timeframe_id])
     dow_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[dow_timeframe_id])
+    htf_pattern_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[htf_pattern_timeframe_id])
+    ltf_pattern_timeframe: Mapped[Optional["Timeframe"]] = relationship(foreign_keys=[ltf_pattern_timeframe_id])
     runs: Mapped[list["BacktestRun"]] = relationship(back_populates="strategy", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -399,3 +411,47 @@ class MLScore(Base):
         Index("ix_ml_scores_lookup", "dataset_id", "timeframe_id", "model_id", "score"),
         Index("ix_ml_scores_window", "window_id"),
     )
+
+
+class PatternInstance(Base):
+    """ダブルボトム/ダブルトップなどのチャートパターン"""
+    __tablename__ = "pattern_instances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"))
+    timeframe_id: Mapped[int] = mapped_column(ForeignKey("timeframes.id"))
+    pattern_type: Mapped[str] = mapped_column(String(32))  # "double_bottom", "double_top"
+    left_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 左側の山/谷時刻
+    right_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 右側の山/谷時刻
+    neckline_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # ネックライン時刻
+    left_price: Mapped[float] = mapped_column(Float)
+    right_price: Mapped[float] = mapped_column(Float)
+    neckline_price: Mapped[float] = mapped_column(Float)
+    confirmed_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 右側確定時刻（未来参照排除）
+    params_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # tol, atr_mult, min_bars, method等
+    rule_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # ルールベーススコア
+    ml_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # ML推論スコア
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    dataset: Mapped["Dataset"] = relationship()
+    instrument: Mapped["Instrument"] = relationship()
+    timeframe: Mapped["Timeframe"] = relationship()
+    labels: Mapped[list["PatternLabel"]] = relationship(back_populates="pattern", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_pattern_instances_lookup", "dataset_id", "instrument_id", "timeframe_id", "pattern_type", "confirmed_ts"),
+    )
+
+
+class PatternLabel(Base):
+    """ユーザーによるパターン評価"""
+    __tablename__ = "pattern_labels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pattern_id: Mapped[int] = mapped_column(ForeignKey("pattern_instances.id", ondelete="CASCADE"))
+    label: Mapped[str] = mapped_column(String(16))  # "good", "bad"
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    pattern: Mapped["PatternInstance"] = relationship(back_populates="labels")
