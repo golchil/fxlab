@@ -622,6 +622,13 @@ def ml_train_pattern_task(
 
         ensure_bucket_exists()
 
+        # === DEBUG LOGGING: Input parameters ===
+        print(f"[PatternTrain] === Starting pattern training ===")
+        print(f"[PatternTrain] Input params: dataset_id={dataset_id}, timeframe={timeframe_name}, pattern_type={pattern_type}")
+        print(f"[PatternTrain] Date filter: start_ts={start_ts!r}, end_ts={end_ts!r}")
+        print(f"[PatternTrain] Sample limits: max_good={max_good}, max_bad={max_bad}")
+        print(f"[PatternTrain] Resolved: timeframe_id={tf.id}, dataset_name={dataset.name}")
+
         # Parse date filters with multiple format support
         def parse_datetime(ts_str: str) -> datetime:
             """Parse datetime string supporting multiple formats."""
@@ -645,8 +652,50 @@ def ml_train_pattern_task(
         end_dt = None
         if start_ts:
             start_dt = parse_datetime(start_ts)
+            print(f"[PatternTrain] Parsed start_dt: {start_dt}")
         if end_ts:
             end_dt = parse_datetime(end_ts)
+            print(f"[PatternTrain] Parsed end_dt: {end_dt}")
+
+        # === DEBUG: Check raw data availability ===
+        # Total patterns for this dataset/timeframe/pattern_type (without label join)
+        total_patterns = (
+            db.query(func.count(PatternInstance.id))
+            .filter(
+                PatternInstance.dataset_id == dataset_id,
+                PatternInstance.timeframe_id == tf.id,
+                PatternInstance.pattern_type == pattern_type,
+            )
+            .scalar()
+        )
+        print(f"[PatternTrain] Total patterns (no label filter): {total_patterns}")
+
+        # Check label values in DB (case sensitivity check)
+        label_values = (
+            db.query(PatternLabel.label, func.count(PatternLabel.id))
+            .join(PatternInstance, PatternInstance.id == PatternLabel.pattern_id)
+            .filter(
+                PatternInstance.dataset_id == dataset_id,
+                PatternInstance.timeframe_id == tf.id,
+                PatternInstance.pattern_type == pattern_type,
+            )
+            .group_by(PatternLabel.label)
+            .all()
+        )
+        print(f"[PatternTrain] Label values in DB (case check): {label_values}")
+
+        # Check if confirmed_ts is NULL for some patterns
+        null_confirmed_count = (
+            db.query(func.count(PatternInstance.id))
+            .filter(
+                PatternInstance.dataset_id == dataset_id,
+                PatternInstance.timeframe_id == tf.id,
+                PatternInstance.pattern_type == pattern_type,
+                PatternInstance.confirmed_ts.is_(None),
+            )
+            .scalar()
+        )
+        print(f"[PatternTrain] Patterns with NULL confirmed_ts: {null_confirmed_count}")
 
         # Build base query for labeled patterns
         base_query = (
@@ -659,6 +708,11 @@ def ml_train_pattern_task(
             )
         )
 
+        # Count before date filter
+        good_before_date = base_query.filter(PatternLabel.label == "good").count()
+        bad_before_date = base_query.filter(PatternLabel.label == "bad").count()
+        print(f"[PatternTrain] Before date filter: good={good_before_date}, bad={bad_before_date}")
+
         # Apply date range filter on confirmed_ts
         if start_dt:
             base_query = base_query.filter(PatternInstance.confirmed_ts >= start_dt)
@@ -670,16 +724,34 @@ def ml_train_pattern_task(
         # Get bad patterns
         bad_patterns = base_query.filter(PatternLabel.label == "bad").all()
 
+        good_count_filtered = len(good_patterns)
+        bad_count_filtered = len(bad_patterns)
+        print(f"[PatternTrain] After date filter: good={good_count_filtered}, bad={bad_count_filtered}")
+
         # Random sample if max limits specified
         if max_good and len(good_patterns) > max_good:
             good_patterns = random.sample(good_patterns, max_good)
         if max_bad and len(bad_patterns) > max_bad:
             bad_patterns = random.sample(bad_patterns, max_bad)
 
+        good_used = len(good_patterns)
+        bad_used = len(bad_patterns)
+        print(f"[PatternTrain] After max limits: good_used={good_used}, bad_used={bad_used}")
+
         labeled_patterns = good_patterns + bad_patterns
 
         if len(labeled_patterns) < 10:
-            raise ValueError(f"Not enough labeled patterns: {len(labeled_patterns)} (need at least 10)")
+            # Enhanced error message with debug info
+            error_msg = (
+                f"Not enough labeled patterns: {len(labeled_patterns)} (need at least 10). "
+                f"Debug: dataset_id={dataset_id}, timeframe={timeframe_name}(id={tf.id}), "
+                f"pattern_type={pattern_type}, total_patterns={total_patterns}, "
+                f"labels_in_db={label_values}, "
+                f"good_before_date={good_before_date}, bad_before_date={bad_before_date}, "
+                f"start_dt={start_dt}, end_dt={end_dt}"
+            )
+            print(f"[PatternTrain] ERROR: {error_msg}")
+            raise ValueError(error_msg)
 
         # Build training data: generate/get window images for each pattern
         samples = []
