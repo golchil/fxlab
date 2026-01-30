@@ -109,6 +109,37 @@
             </div>
             {% endif %}
             <div class="info-item">
+                <label>HTFパターン条件</label>
+                <span>
+                    {% if strategy.htf_pattern_timeframe_id %}
+                    有効（{{ htf_pattern_timeframe.name if htf_pattern_timeframe else "-" }} {{ strategy.htf_pattern_type or "-" }}、{{ strategy.htf_pattern_lookback_hours or 24 }}時間）
+                    {% else %}
+                    無効
+                    {% endif %}
+                </span>
+            </div>
+            <div class="info-item">
+                <label>LTFパターン条件</label>
+                <span>
+                    {% if strategy.ltf_pattern_timeframe_id %}
+                    有効（{{ ltf_pattern_timeframe.name if ltf_pattern_timeframe else "-" }} {{ strategy.ltf_pattern_type or "-" }}、{{ strategy.ltf_pattern_lookback_minutes or 240 }}分）
+                    {% if strategy.require_ltf_breakout %}
+                    <strong>[ブレイクアウト待ち]</strong>
+                    {% endif %}
+                    {% else %}
+                    無効
+                    {% endif %}
+                </span>
+            </div>
+            {% if pattern_warning %}
+            <div class="info-item" style="grid-column: 1 / -1;">
+                <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 0.75rem; border-radius: 4px; color: #856404;">
+                    <strong>警告:</strong> {{ pattern_warning }}
+                    <a href="/ui/datasets/{{ strategy.dataset_id }}" style="margin-left: 0.5rem;">データセットを開く</a>
+                </div>
+            </div>
+            {% endif %}
+            <div class="info-item">
                 <label>作成日</label>
                 <span>{{ strategy.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>

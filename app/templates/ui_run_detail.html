@@ -174,6 +174,7 @@
                     <th>損益 (pips)</th>
                     <th>R倍率</th>
                     <th>理由</th>
+                    <th>パターン</th>
                     <th>画像</th>
                 </tr>
             </thead>
@@ -199,6 +200,16 @@
                         {% elif t.exit_reason == "end_of_data" %}データ終了
                         {% else %}{{ t.exit_reason or "-" }}
                         {% endif %}
+                    </td>
+                    <td>
+                        {% set meta = t.meta_json | from_json if t.meta_json else {} %}
+                        {% if meta.htf_pattern_id %}
+                        <a href="/ui/lab/patterns/{{ meta.htf_pattern_id }}" title="HTFパターン">H</a>
+                        {% endif %}
+                        {% if meta.ltf_pattern_id %}
+                        <a href="/ui/lab/patterns/{{ meta.ltf_pattern_id }}" title="LTFパターン">L</a>
+                        {% endif %}
+                        {% if not meta.htf_pattern_id and not meta.ltf_pattern_id %}-{% endif %}
                     </td>
                     <td>
                         <a href="/ui/trades/{{ t.id }}" class="btn btn-small">画像で確認</a>

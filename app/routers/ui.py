@@ -1492,6 +1492,13 @@ def ui_create_strategy(
     htf_lookback_hours: Optional[str] = Form(None),
     require_htf_signal: Optional[str] = Form(None),
     dow_timeframe_id: Optional[str] = Form(None),
+    htf_pattern_timeframe_id: Optional[str] = Form(None),
+    htf_pattern_type: Optional[str] = Form(None),
+    htf_pattern_lookback_hours: Optional[str] = Form(None),
+    ltf_pattern_timeframe_id: Optional[str] = Form(None),
+    ltf_pattern_type: Optional[str] = Form(None),
+    ltf_pattern_lookback_minutes: Optional[str] = Form(None),
+    require_ltf_breakout: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a strategy from form submission."""
@@ -1507,6 +1514,15 @@ def ui_create_strategy(
 
     # Parse Dow Theory timeframe
     dow_tf_id = int(dow_timeframe_id) if dow_timeframe_id and dow_timeframe_id.strip() else None
+
+    # Parse MTF Pattern fields
+    htf_pattern_tf_id = int(htf_pattern_timeframe_id) if htf_pattern_timeframe_id and htf_pattern_timeframe_id.strip() else None
+    htf_pt_type = htf_pattern_type.strip() if htf_pattern_type and htf_pattern_type.strip() else None
+    htf_pt_hours = int(htf_pattern_lookback_hours) if htf_pattern_lookback_hours and htf_pattern_lookback_hours.strip() else 24
+    ltf_pattern_tf_id = int(ltf_pattern_timeframe_id) if ltf_pattern_timeframe_id and ltf_pattern_timeframe_id.strip() else None
+    ltf_pt_type = ltf_pattern_type.strip() if ltf_pattern_type and ltf_pattern_type.strip() else None
+    ltf_pt_minutes = int(ltf_pattern_lookback_minutes) if ltf_pattern_lookback_minutes and ltf_pattern_lookback_minutes.strip() else 240
+    ltf_breakout = require_ltf_breakout == "on"
 
     strategy = Strategy(
         name=name,
@@ -1535,6 +1551,13 @@ def ui_create_strategy(
         htf_confirmed_only=True,
         require_htf_signal=htf_required,
         dow_timeframe_id=dow_tf_id,
+        htf_pattern_timeframe_id=htf_pattern_tf_id,
+        htf_pattern_type=htf_pt_type,
+        htf_pattern_lookback_hours=htf_pt_hours,
+        ltf_pattern_timeframe_id=ltf_pattern_tf_id,
+        ltf_pattern_type=ltf_pt_type,
+        ltf_pattern_lookback_minutes=ltf_pt_minutes,
+        require_ltf_breakout=ltf_breakout,
         created_at=datetime.utcnow(),
     )
     db.add(strategy)
@@ -1555,6 +1578,8 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
     timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.timeframe_id).first()
     htf_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.htf_timeframe_id).first() if strategy.htf_timeframe_id else None
     dow_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.dow_timeframe_id).first() if strategy.dow_timeframe_id else None
+    htf_pattern_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.htf_pattern_timeframe_id).first() if strategy.htf_pattern_timeframe_id else None
+    ltf_pattern_timeframe = db.query(Timeframe).filter(Timeframe.id == strategy.ltf_pattern_timeframe_id).first() if strategy.ltf_pattern_timeframe_id else None
 
     # Check if swing_points exist for dow_timeframe
     dow_swing_warning = None
@@ -1580,6 +1605,28 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
                 dow_old_format = True
                 dow_swing_warning = f"旧形式のスイングポイント({old_format_count}件)が含まれています。未来参照を排除するため、スイングの再生成を推奨します。"
 
+    # Check pattern_instances for HTF/LTF pattern conditions
+    pattern_warning = None
+    if strategy.htf_pattern_timeframe_id and strategy.htf_pattern_type:
+        htf_pattern_count = db.query(func.count(PatternInstance.id)).filter(
+            PatternInstance.dataset_id == strategy.dataset_id,
+            PatternInstance.instrument_id == strategy.instrument_id,
+            PatternInstance.timeframe_id == strategy.htf_pattern_timeframe_id,
+            PatternInstance.pattern_type == strategy.htf_pattern_type,
+        ).scalar() or 0
+        if htf_pattern_count == 0:
+            pattern_warning = f"HTFパターン({strategy.htf_pattern_type})が未検出です。データセット詳細ページでパターン検出を行ってください。"
+
+    if strategy.ltf_pattern_timeframe_id and strategy.ltf_pattern_type and not pattern_warning:
+        ltf_pattern_count = db.query(func.count(PatternInstance.id)).filter(
+            PatternInstance.dataset_id == strategy.dataset_id,
+            PatternInstance.instrument_id == strategy.instrument_id,
+            PatternInstance.timeframe_id == strategy.ltf_pattern_timeframe_id,
+            PatternInstance.pattern_type == strategy.ltf_pattern_type,
+        ).scalar() or 0
+        if ltf_pattern_count == 0:
+            pattern_warning = f"LTFパターン({strategy.ltf_pattern_type})が未検出です。データセット詳細ページでパターン検出を行ってください。"
+
     runs = (
         db.query(BacktestRun)
         .filter(BacktestRun.strategy_id == strategy_id)
@@ -1601,8 +1648,11 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
         "timeframe": timeframe,
         "htf_timeframe": htf_timeframe,
         "dow_timeframe": dow_timeframe,
+        "htf_pattern_timeframe": htf_pattern_timeframe,
+        "ltf_pattern_timeframe": ltf_pattern_timeframe,
         "dow_swing_count": dow_swing_count,
         "dow_swing_warning": dow_swing_warning,
+        "pattern_warning": pattern_warning,
         "runs": runs,
         "rules": rules,
         "feat_names": FEATURE_DISPLAY_NAMES,

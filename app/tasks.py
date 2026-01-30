@@ -976,6 +976,102 @@ def backtest_task(
             )
             htf_signals = [r[0] for r in htf_signals_q]
 
+        # MTF Pattern setup (HTF/LTF double bottom/top)
+        htf_pattern_enabled = (
+            strategy.htf_pattern_timeframe_id is not None
+            and strategy.htf_pattern_type is not None
+        )
+        ltf_pattern_enabled = (
+            strategy.ltf_pattern_timeframe_id is not None
+            and strategy.ltf_pattern_type is not None
+        )
+        htf_patterns = []  # list of (id, confirmed_ts, neckline_price, pattern_type)
+        ltf_patterns = []
+        htf_pattern_lookback_td = None
+        ltf_pattern_lookback_td = None
+
+        if htf_pattern_enabled:
+            htf_pattern_lookback_td = timedelta(hours=strategy.htf_pattern_lookback_hours or 24)
+            htf_patterns_q = (
+                db.query(
+                    PatternInstance.id,
+                    PatternInstance.confirmed_ts,
+                    PatternInstance.neckline_price,
+                    PatternInstance.pattern_type,
+                    PatternInstance.right_ts,
+                )
+                .filter(
+                    PatternInstance.dataset_id == strategy.dataset_id,
+                    PatternInstance.instrument_id == strategy.instrument_id,
+                    PatternInstance.timeframe_id == strategy.htf_pattern_timeframe_id,
+                    PatternInstance.pattern_type == strategy.htf_pattern_type,
+                )
+                .order_by(PatternInstance.confirmed_ts)
+                .all()
+            )
+            htf_patterns = [
+                {"id": r[0], "confirmed_ts": r[1], "neckline_price": r[2], "pattern_type": r[3], "right_ts": r[4]}
+                for r in htf_patterns_q
+            ]
+
+        if ltf_pattern_enabled:
+            ltf_pattern_lookback_td = timedelta(minutes=strategy.ltf_pattern_lookback_minutes or 240)
+            ltf_patterns_q = (
+                db.query(
+                    PatternInstance.id,
+                    PatternInstance.confirmed_ts,
+                    PatternInstance.neckline_price,
+                    PatternInstance.pattern_type,
+                    PatternInstance.right_ts,
+                )
+                .filter(
+                    PatternInstance.dataset_id == strategy.dataset_id,
+                    PatternInstance.instrument_id == strategy.instrument_id,
+                    PatternInstance.timeframe_id == strategy.ltf_pattern_timeframe_id,
+                    PatternInstance.pattern_type == strategy.ltf_pattern_type,
+                )
+                .order_by(PatternInstance.confirmed_ts)
+                .all()
+            )
+            ltf_patterns = [
+                {"id": r[0], "confirmed_ts": r[1], "neckline_price": r[2], "pattern_type": r[3], "right_ts": r[4]}
+                for r in ltf_patterns_q
+            ]
+
+        def find_htf_pattern(bar_ts):
+            """Find the most recent HTF pattern before bar_ts within lookback window."""
+            if not htf_patterns:
+                return None
+            import bisect
+            confirmed_times = [p["confirmed_ts"] for p in htf_patterns]
+            idx = bisect.bisect_right(confirmed_times, bar_ts) - 1
+            if idx < 0:
+                return None
+            pattern = htf_patterns[idx]
+            if bar_ts - pattern["confirmed_ts"] <= htf_pattern_lookback_td:
+                return pattern
+            return None
+
+        def find_ltf_pattern(bar_ts, htf_pattern):
+            """
+            Find the most recent LTF pattern before bar_ts.
+            Must be confirmed after HTF pattern's right_ts (フラクタル検証).
+            """
+            if not ltf_patterns or not htf_pattern:
+                return None
+            import bisect
+            confirmed_times = [p["confirmed_ts"] for p in ltf_patterns]
+            idx = bisect.bisect_right(confirmed_times, bar_ts) - 1
+            if idx < 0:
+                return None
+            pattern = ltf_patterns[idx]
+            # LTFパターンはHTFのright_ts以降に確定している必要がある
+            if pattern["confirmed_ts"] < htf_pattern["right_ts"]:
+                return None
+            if bar_ts - pattern["confirmed_ts"] <= ltf_pattern_lookback_td:
+                return pattern
+            return None
+
         # Dow Theory trend setup (未来参照なし: confirmed_tsでフィルタ)
         dow_enabled = strategy.dow_timeframe_id is not None
         swing_highs = []  # list of (confirmed_ts, price)
@@ -1349,6 +1445,7 @@ def backtest_task(
                         r_multiple=round(r_multiple, 4),
                         exit_reason=exit_reason,
                         signal_ts=position.get("signal_ts"),
+                        meta_json=json.dumps(position.get("pattern_meta")) if position.get("pattern_meta") else None,
                     ))
                     position = None
                     cooldown_remaining = strategy.cooldown_bars
@@ -1368,6 +1465,43 @@ def backtest_task(
                     if current_signal_ts is None:
                         continue
                 cnt_bars_htf_ok += 1
+
+                # MTF Pattern check (HTF + LTF double bottom/top)
+                current_htf_pattern = None
+                current_ltf_pattern = None
+                pattern_entry_triggered = False
+
+                if htf_pattern_enabled:
+                    current_htf_pattern = find_htf_pattern(bar.ts)
+                    if current_htf_pattern is None:
+                        continue  # HTFパターン条件を満たさない
+
+                    if ltf_pattern_enabled:
+                        current_ltf_pattern = find_ltf_pattern(bar.ts, current_htf_pattern)
+                        if current_ltf_pattern is None:
+                            continue  # LTFパターン条件を満たさない
+
+                        # require_ltf_breakout: LTFネックライン上抜け/下抜けでエントリー
+                        if strategy.require_ltf_breakout:
+                            neckline = current_ltf_pattern["neckline_price"]
+                            pt = current_ltf_pattern["pattern_type"]
+                            if pt == "double_bottom":
+                                # ダブルボトム: 高値がネックライン上抜け
+                                if bar.high > neckline:
+                                    pattern_entry_triggered = True
+                            else:  # double_top
+                                # ダブルトップ: 安値がネックライン下抜け
+                                if bar.low < neckline:
+                                    pattern_entry_triggered = True
+
+                            if not pattern_entry_triggered:
+                                continue  # ブレイクアウト待ち
+                        else:
+                            # LTF confirmed_tsでエントリー（既に条件満たしている）
+                            pattern_entry_triggered = True
+                    else:
+                        # LTF無効、HTFのみでエントリー
+                        pattern_entry_triggered = True
 
                 features = get_features_for_bar(bar, i)
                 if features is None:
@@ -1417,6 +1551,14 @@ def backtest_task(
                     sl_price = entry_price + sl_dist
                     sl_raw = entry_price + sl_dist
 
+                # Pattern meta info for trade
+                pattern_meta = None
+                if current_htf_pattern or current_ltf_pattern:
+                    pattern_meta = {
+                        "htf_pattern_id": current_htf_pattern["id"] if current_htf_pattern else None,
+                        "ltf_pattern_id": current_ltf_pattern["id"] if current_ltf_pattern else None,
+                    }
+
                 position = {
                     "entry_ts": entry_ts,
                     "entry_price": round(entry_price, 6),
@@ -1427,6 +1569,7 @@ def backtest_task(
                     "hold_bars": 0,
                     "atr14": atr14,
                     "signal_ts": current_signal_ts,
+                    "pattern_meta": pattern_meta,
                 }
                 cnt_entries += 1
 
@@ -1453,6 +1596,7 @@ def backtest_task(
                 r_multiple=round(r_multiple, 4),
                 exit_reason="end_of_data",
                 signal_ts=position.get("signal_ts"),
+                meta_json=json.dumps(position.get("pattern_meta")) if position.get("pattern_meta") else None,
             ))
 
         if trades_list:
