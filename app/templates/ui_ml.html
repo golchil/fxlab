@@ -117,21 +117,55 @@
                 <label>lookback_n:</label>
                 <input type="number" name="lookback_n" value="72" min="20" max="256">
             </div>
+
+            <h4 style="margin: 1rem 0 0.5rem; color: var(--gray-600);">期間指定</h4>
+            <div class="form-row">
+                <label>開始日時:</label>
+                <input type="text" name="start_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <label>終了日時:</label>
+                <input type="text" name="end_ts" placeholder="YYYY-MM-DD HH:MM">
+            </div>
+            <div class="form-row">
+                <label>good上限:</label>
+                <input type="number" name="max_good" placeholder="無制限" min="1">
+            </div>
+            <div class="form-row">
+                <label>bad上限:</label>
+                <input type="number" name="max_bad" placeholder="無制限" min="1">
+            </div>
+
+            <h4 style="margin: 1rem 0 0.5rem; color: var(--gray-600);">学習設定</h4>
             <div class="form-row">
                 <label>エポック数:</label>
-                <input type="number" name="epochs" value="10" min="1" max="100">
+                <input type="number" name="epochs" value="3" min="1" max="100">
             </div>
             <div class="form-row">
                 <label>バッチサイズ:</label>
-                <input type="number" name="batch_size" value="32" min="8" max="128">
+                <input type="number" name="batch_size" value="16" min="4" max="128">
             </div>
             <div class="form-row">
                 <label>学習率:</label>
                 <input type="text" name="learning_rate" value="0.001">
             </div>
             <div class="form-row">
-                <label>上限件数:</label>
-                <input type="text" name="limit" placeholder="任意">
+                <label>画像サイズ:</label>
+                <select name="image_size">
+                    <option value="160">160x160 (高速)</option>
+                    <option value="224" selected>224x224 (標準)</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Backbone凍結:</label>
+                <select name="freeze_backbone">
+                    <option value="1" selected>ON (FCのみ学習、高速)</option>
+                    <option value="0">OFF (全層学習)</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>ランダムシード:</label>
+                <input type="number" name="random_seed" value="42" min="0">
             </div>
             <div class="form-row">
                 <button type="submit" class="btn btn-primary">パターン学習開始</button>

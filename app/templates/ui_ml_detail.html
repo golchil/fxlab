@@ -29,6 +29,18 @@
             <tr><th>エポック数</th><td>{{ config.get('epochs', '-') }}</td></tr>
             <tr><th>バッチサイズ</th><td>{{ config.get('batch_size', '-') }}</td></tr>
             <tr><th>学習率</th><td>{{ config.get('learning_rate', '-') }}</td></tr>
+            {% if config.get('image_size') %}
+            <tr><th>画像サイズ</th><td>{{ config.get('image_size') }}x{{ config.get('image_size') }}</td></tr>
+            {% endif %}
+            {% if config.get('freeze_backbone') is not none %}
+            <tr><th>Backbone凍結</th><td>{{ 'ON' if config.get('freeze_backbone') else 'OFF' }}</td></tr>
+            {% endif %}
+            {% if config.get('random_seed') %}
+            <tr><th>ランダムシード</th><td>{{ config.get('random_seed') }}</td></tr>
+            {% endif %}
+            {% if config.get('max_good') or config.get('max_bad') %}
+            <tr><th>サンプル上限</th><td>good={{ config.get('max_good', '-') }}, bad={{ config.get('max_bad', '-') }}</td></tr>
+            {% endif %}
         </table>
     </div>
 
@@ -37,6 +49,12 @@
         <table class="info-table">
             <tr><th>学習データ数</th><td>{{ metrics.get('train_samples', 0) }}</td></tr>
             <tr><th>検証データ数</th><td>{{ metrics.get('val_samples', 0) }}</td></tr>
+            {% if metrics.get('good_used') is not none %}
+            <tr><th>使用サンプル数</th><td>good={{ metrics.get('good_used', 0) }}, bad={{ metrics.get('bad_used', 0) }} (計{{ metrics.get('total_samples', 0) }})</td></tr>
+            {% endif %}
+            {% if metrics.get('start_ts') or metrics.get('end_ts') %}
+            <tr><th>学習期間</th><td>{{ metrics.get('start_ts', '最初') }} ~ {{ metrics.get('end_ts', '最後') }}</td></tr>
+            {% endif %}
             <tr><th>検証精度</th><td>{{ (metrics.get('best_val_accuracy', 0) * 100)|round(2) }}%</td></tr>
             <tr><th>AUC</th><td>{{ (metrics.get('auc', 0) * 100)|round(2) }}%</td></tr>
             <tr><th>最終Loss</th><td>{{ metrics.get('final_train_loss', '-') }}</td></tr>

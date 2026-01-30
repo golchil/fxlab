@@ -2518,16 +2518,28 @@ def ui_ml_train_pattern(
     pattern_type: str = Form(...),
     dataset_id: int = Form(...),
     timeframe_name: str = Form(...),
-    epochs: int = Form(10),
-    batch_size: int = Form(32),
+    epochs: int = Form(3),
+    batch_size: int = Form(16),
     learning_rate: float = Form(0.001),
-    lookback_n: int = Form(128),
-    limit: Optional[str] = Form(None),
+    lookback_n: int = Form(72),
+    start_ts: Optional[str] = Form(None),
+    end_ts: Optional[str] = Form(None),
+    max_good: Optional[int] = Form(None),
+    max_bad: Optional[int] = Form(None),
+    image_size: int = Form(224),
+    freeze_backbone: int = Form(1),
+    random_seed: int = Form(42),
     db: Session = Depends(get_db),
 ):
     """Start pattern ML training job."""
     try:
-        limit_val = int(limit) if limit and limit.strip() else None
+        # Parse datetime strings
+        start_ts_val = None
+        end_ts_val = None
+        if start_ts and start_ts.strip():
+            start_ts_val = start_ts.strip()
+        if end_ts and end_ts.strip():
+            end_ts_val = end_ts.strip()
 
         params = {
             "model_name": model_name,
@@ -2539,7 +2551,13 @@ def ui_ml_train_pattern(
             "batch_size": batch_size,
             "learning_rate": learning_rate,
             "lookback_n": lookback_n,
-            "limit": limit_val,
+            "start_ts": start_ts_val,
+            "end_ts": end_ts_val,
+            "max_good": max_good,
+            "max_bad": max_bad,
+            "image_size": image_size,
+            "freeze_backbone": freeze_backbone == 1,
+            "random_seed": random_seed,
         }
 
         job = Job(
@@ -2562,7 +2580,13 @@ def ui_ml_train_pattern(
             batch_size=batch_size,
             learning_rate=learning_rate,
             lookback_n=lookback_n,
-            limit=limit_val,
+            start_ts=start_ts_val,
+            end_ts=end_ts_val,
+            max_good=max_good,
+            max_bad=max_bad,
+            image_size=image_size,
+            freeze_backbone=freeze_backbone == 1,
+            random_seed=random_seed,
         )
 
         return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)

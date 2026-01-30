@@ -565,17 +565,32 @@ def ml_train_pattern_task(
     self, job_id: int, dataset_id: int, timeframe_name: str,
     pattern_type: str,  # "double_bottom" or "double_top"
     model_name: str,
-    epochs: int = 10,
-    batch_size: int = 32,
+    epochs: int = 3,
+    batch_size: int = 16,
     learning_rate: float = 0.001,
-    lookback_n: int = 128,
-    limit: int = None,
+    lookback_n: int = 72,
+    start_ts: str = None,
+    end_ts: str = None,
+    max_good: int = None,
+    max_bad: int = None,
+    image_size: int = 224,
+    freeze_backbone: bool = True,
+    random_seed: int = 42,
 ):
     """
     Train a CNN model for pattern classification using pattern_labels.
 
     Uses pattern_labels.good as positive, pattern_labels.bad as negative.
     Generates window images centered at pattern's right_ts.
+
+    Args:
+        start_ts: Filter patterns by confirmed_ts >= start_ts (YYYY-MM-DD HH:MM)
+        end_ts: Filter patterns by confirmed_ts <= end_ts (YYYY-MM-DD HH:MM)
+        max_good: Max number of good samples to use
+        max_bad: Max number of bad samples to use
+        image_size: Image resize dimension (e.g., 160 for faster, 224 for standard)
+        freeze_backbone: If True, freeze ResNet backbone and train only FC layer
+        random_seed: Random seed for reproducibility
     """
     import torch
     import torch.nn as nn
@@ -585,6 +600,10 @@ def ml_train_pattern_task(
     from PIL import Image
     from app.services.minio_client import get_image, upload_image, ensure_bucket_exists
     from app.services.image_generator import generate_candlestick_image
+
+    # Set random seed for reproducibility
+    random.seed(random_seed)
+    torch.manual_seed(random_seed)
 
     db = SessionLocal()
     try:
@@ -603,18 +622,43 @@ def ml_train_pattern_task(
 
         ensure_bucket_exists()
 
-        # Get labeled patterns
-        labeled_patterns = (
+        # Parse date filters
+        start_dt = None
+        end_dt = None
+        if start_ts:
+            start_dt = datetime.strptime(start_ts, "%Y-%m-%d %H:%M")
+        if end_ts:
+            end_dt = datetime.strptime(end_ts, "%Y-%m-%d %H:%M")
+
+        # Build base query for labeled patterns
+        base_query = (
             db.query(PatternInstance, PatternLabel)
             .join(PatternLabel, PatternLabel.pattern_id == PatternInstance.id)
             .filter(
                 PatternInstance.dataset_id == dataset_id,
                 PatternInstance.timeframe_id == tf.id,
                 PatternInstance.pattern_type == pattern_type,
-                PatternLabel.label.in_(["good", "bad"]),
             )
-            .all()
         )
+
+        # Apply date range filter on confirmed_ts
+        if start_dt:
+            base_query = base_query.filter(PatternInstance.confirmed_ts >= start_dt)
+        if end_dt:
+            base_query = base_query.filter(PatternInstance.confirmed_ts <= end_dt)
+
+        # Get good patterns
+        good_patterns = base_query.filter(PatternLabel.label == "good").all()
+        # Get bad patterns
+        bad_patterns = base_query.filter(PatternLabel.label == "bad").all()
+
+        # Random sample if max limits specified
+        if max_good and len(good_patterns) > max_good:
+            good_patterns = random.sample(good_patterns, max_good)
+        if max_bad and len(bad_patterns) > max_bad:
+            bad_patterns = random.sample(bad_patterns, max_bad)
+
+        labeled_patterns = good_patterns + bad_patterns
 
         if len(labeled_patterns) < 10:
             raise ValueError(f"Not enough labeled patterns: {len(labeled_patterns)} (need at least 10)")
@@ -658,27 +702,30 @@ def ml_train_pattern_task(
         if len(samples) < 10:
             raise ValueError(f"Not enough samples with images: {len(samples)}")
 
+        # Count good/bad samples used
+        good_used = sum(1 for _, label in samples if label == 1)
+        bad_used = sum(1 for _, label in samples if label == 0)
+
         random.shuffle(samples)
-        if limit:
-            samples = samples[:limit]
 
         # Split train/val (80/20)
         split_idx = int(len(samples) * 0.8)
         train_data = samples[:split_idx]
         val_data = samples[split_idx:]
 
-        # Define transforms
+        # Define transforms with configurable image size
         transform = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
         # Custom dataset class
         class ImageDataset(TorchDataset):
-            def __init__(self, data_list, transform):
+            def __init__(self, data_list, transform, img_size):
                 self.data = data_list
                 self.transform = transform
+                self.img_size = img_size
 
             def __len__(self):
                 return len(self.data)
@@ -691,10 +738,10 @@ def ml_train_pattern_task(
                     img = self.transform(img)
                     return img, label
                 except Exception:
-                    return torch.zeros(3, 224, 224), label
+                    return torch.zeros(3, self.img_size, self.img_size), label
 
-        train_dataset = ImageDataset(train_data, transform)
-        val_dataset = ImageDataset(val_data, transform)
+        train_dataset = ImageDataset(train_data, transform, image_size)
+        val_dataset = ImageDataset(val_data, transform, image_size)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -702,11 +749,22 @@ def ml_train_pattern_task(
         # Create model (ResNet18 pretrained)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+        # Freeze backbone if requested (only train FC layer for faster training)
+        if freeze_backbone:
+            for param in model.parameters():
+                param.requires_grad = False
+
+        # Replace final FC layer (always trainable)
         model.fc = nn.Linear(model.fc.in_features, 2)
         model = model.to(device)
 
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        # Only optimize FC layer parameters if backbone frozen
+        if freeze_backbone:
+            optimizer = optim.Adam(model.fc.parameters(), lr=learning_rate)
+        else:
+            optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         # Training loop
         best_val_acc = 0.0
@@ -784,10 +842,15 @@ def ml_train_pattern_task(
         metrics = {
             "train_samples": len(train_data),
             "val_samples": len(val_data),
+            "good_used": good_used,
+            "bad_used": bad_used,
+            "total_samples": good_used + bad_used,
             "epochs": epochs,
             "best_val_accuracy": round(best_val_acc, 4),
             "final_train_loss": round(train_losses[-1], 4) if train_losses else 0,
             "auc": round(auc, 4),
+            "start_ts": start_ts,
+            "end_ts": end_ts,
         }
 
         config = {
@@ -797,6 +860,11 @@ def ml_train_pattern_task(
             "batch_size": batch_size,
             "learning_rate": learning_rate,
             "lookback_n": lookback_n,
+            "image_size": image_size,
+            "freeze_backbone": freeze_backbone,
+            "random_seed": random_seed,
+            "max_good": max_good,
+            "max_bad": max_bad,
             "architecture": "resnet18",
         }
 
