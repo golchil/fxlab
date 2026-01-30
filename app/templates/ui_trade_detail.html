@@ -133,6 +133,49 @@
         </div>
     </section>
 
+    {# HTF (Higher TimeFrame) Section #}
+    {% if htf_timeframe %}
+    <section class="info-section htf-section">
+        <h2>上位足チャート（{{ htf_timeframe.name }}）</h2>
+        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
+            上位足（{{ htf_timeframe.name }}）でのエントリー/エグジット位置（青線: ENTRY、オレンジ線: EXIT）
+        </p>
+
+        {% if trade_image and trade_image.htf_range_image_key %}
+        <div class="trade-range-image" style="margin-bottom: 1.5rem;">
+            <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">取引全体像（{{ htf_timeframe.name }}）</h3>
+            <img src="/ui/trades/{{ trade.id }}/htf_range.png" alt="HTF Trade Range Chart" loading="lazy">
+        </div>
+        {% endif %}
+
+        <div class="trade-images">
+            <div class="trade-image-box">
+                <h3>エントリー時点（{{ htf_timeframe.name }}）</h3>
+                <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
+                {% if trade_image and trade_image.htf_entry_image_key %}
+                <img src="/ui/trades/{{ trade.id }}/htf_entry.png" alt="HTF Entry Chart" loading="lazy">
+                {% else %}
+                <p class="no-image">画像なし</p>
+                {% endif %}
+            </div>
+            <div class="trade-image-box">
+                <h3>エグジット時点（{{ htf_timeframe.name }}）</h3>
+                <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
+                {% if trade_image and trade_image.htf_exit_image_key %}
+                <img src="/ui/trades/{{ trade.id }}/htf_exit.png" alt="HTF Exit Chart" loading="lazy">
+                {% else %}
+                <p class="no-image">画像なし</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+    {% else %}
+    <section class="info-section">
+        <h2>上位足チャート</h2>
+        <p style="color: var(--gray-500);">上位足未設定（戦略にHTFパターン条件またはダウ条件がありません）</p>
+    </section>
+    {% endif %}
+
     <div class="nav-buttons" style="margin-top: 2rem; text-align: center;">
         {% if prev_trade_id %}
         <a href="/ui/trades/{{ prev_trade_id }}" class="btn btn-large">&larr; 前の取引</a>
@@ -214,6 +257,15 @@
 .btn-large {
     padding: 0.75rem 1.5rem;
     font-size: 1rem;
+}
+
+.htf-section {
+    border-left: 4px solid #3498db;
+    background: linear-gradient(90deg, rgba(52, 152, 219, 0.05), transparent);
+}
+
+.htf-section h2 {
+    color: #2980b9;
 }
 </style>
 {% endblock %}

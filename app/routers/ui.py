@@ -2539,6 +2539,161 @@ def snap_to_bar_start(ts: datetime, tf_minutes: int) -> datetime:
     return datetime.fromtimestamp(snapped_unix, tz=timezone.utc)
 
 
+def get_htf_timeframe(db: Session, strategy: Strategy) -> Timeframe | None:
+    """Get HTF timeframe from strategy settings.
+
+    Priority:
+    1. strategy.htf_pattern_timeframe_id (MTF pattern strategy)
+    2. strategy.dow_timeframe_id (Dow theory strategy)
+    3. H1 fallback
+    """
+    # Priority 1: MTF pattern timeframe
+    if strategy.htf_pattern_timeframe_id:
+        tf = db.query(Timeframe).filter(Timeframe.id == strategy.htf_pattern_timeframe_id).first()
+        if tf:
+            return tf
+
+    # Priority 2: Dow timeframe
+    if strategy.dow_timeframe_id:
+        tf = db.query(Timeframe).filter(Timeframe.id == strategy.dow_timeframe_id).first()
+        if tf:
+            return tf
+
+    # Priority 3: H1 fallback
+    tf = db.query(Timeframe).filter(Timeframe.name == "H1").first()
+    return tf
+
+
+def generate_trade_image_for_timeframe(
+    db: Session,
+    trade: Trade,
+    strategy: Strategy,
+    target_ts: datetime,
+    timeframe: Timeframe,
+    lookback_n: int,
+    ma_periods: list,
+    marker_label: str = None,
+    marker_color: str = None,
+) -> bytes:
+    """Generate chart image for a trade at given timestamp with optional marker on specified timeframe."""
+    # Snap to bar start for the given timeframe
+    snapped_ts = snap_to_bar_start(target_ts, timeframe.minutes)
+
+    # Get bars ending at snapped_ts
+    bars = (
+        db.query(Bar)
+        .filter(
+            Bar.dataset_id == strategy.dataset_id,
+            Bar.instrument_id == strategy.instrument_id,
+            Bar.timeframe_id == timeframe.id,
+            Bar.ts <= snapped_ts,
+        )
+        .order_by(Bar.ts.desc())
+        .limit(lookback_n)
+        .all()
+    )
+
+    if not bars:
+        raise ValueError(f"No bars found before {snapped_ts} for timeframe {timeframe.name}")
+
+    # Reverse to chronological order
+    bars = list(reversed(bars))
+
+    # Prepare data for image generator
+    bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+    # Prepare marker if specified (marker is at the last bar = snapped_ts)
+    markers = None
+    if marker_label and marker_color:
+        marker_bar_index = len(bars) - 1  # Last bar is the target timestamp
+        markers = [(marker_bar_index, marker_label, marker_color)]
+
+    # Generate image
+    return generate_candlestick_image(bar_data, ma_periods=ma_periods, markers=markers)
+
+
+def generate_trade_range_image_for_timeframe(
+    db: Session,
+    trade: Trade,
+    strategy: Strategy,
+    timeframe: Timeframe,
+    ma_periods: list,
+    max_bars: int = 256,
+) -> bytes | None:
+    """Generate chart image showing the full trade range for specified timeframe."""
+    from app.services.image_generator import COLOR_ENTRY, COLOR_EXIT
+
+    if not trade.entry_ts or not trade.exit_ts:
+        return None
+
+    # Snap both timestamps to bar start for the given timeframe
+    entry_snapped = snap_to_bar_start(trade.entry_ts, timeframe.minutes)
+    exit_snapped = snap_to_bar_start(trade.exit_ts, timeframe.minutes)
+
+    # Calculate bars between entry and exit
+    entry_unix = int(entry_snapped.replace(tzinfo=timezone.utc).timestamp())
+    exit_unix = int(exit_snapped.replace(tzinfo=timezone.utc).timestamp())
+    tf_seconds = timeframe.minutes * 60
+    bars_between = (exit_unix - entry_unix) // tf_seconds + 1
+
+    # If trade spans more than max_bars, skip range image
+    if bars_between > max_bars:
+        return None
+
+    # Add padding before entry and after exit for context
+    padding = max(20, bars_between // 4)  # At least 20 bars padding, or 25% of trade duration
+
+    # Get bars: padding before entry through padding after exit
+    start_ts = datetime.fromtimestamp(entry_unix - padding * tf_seconds, tz=timezone.utc)
+    end_ts = datetime.fromtimestamp(exit_unix + padding * tf_seconds, tz=timezone.utc)
+
+    bars = (
+        db.query(Bar)
+        .filter(
+            Bar.dataset_id == strategy.dataset_id,
+            Bar.instrument_id == strategy.instrument_id,
+            Bar.timeframe_id == timeframe.id,
+            Bar.ts >= start_ts,
+            Bar.ts <= end_ts,
+        )
+        .order_by(Bar.ts.asc())
+        .all()
+    )
+
+    if len(bars) < 3:
+        return None
+
+    # Prepare data for image generator
+    bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+    # Find entry and exit bar indices
+    entry_idx = None
+    exit_idx = None
+    for i, b in enumerate(bars):
+        if b.ts == entry_snapped:
+            entry_idx = i
+        if b.ts == exit_snapped:
+            exit_idx = i
+
+    if entry_idx is None or exit_idx is None:
+        return None
+
+    # Prepare markers and highlight
+    markers = [
+        (entry_idx, "ENTRY", COLOR_ENTRY),
+        (exit_idx, "EXIT", COLOR_EXIT),
+    ]
+    highlight_range = (entry_idx, exit_idx)
+
+    # Generate image
+    return generate_candlestick_image(
+        bar_data,
+        ma_periods=ma_periods,
+        markers=markers,
+        highlight_range=highlight_range
+    )
+
+
 def generate_trade_image(
     db: Session,
     trade: Trade,
@@ -2686,6 +2841,7 @@ def get_or_create_trade_images(
     strategy: Strategy,
     lookback_n: int = None,
     ma_periods: list = None,
+    generate_htf: bool = True,
 ) -> TradeImage:
     """Get or create trade images (cached in MinIO)."""
     if ma_periods is None:
@@ -2743,6 +2899,58 @@ def get_or_create_trade_images(
         except Exception as e:
             print(f"Error generating range image for trade {trade.id}: {e}")
 
+    # HTF (Higher TimeFrame) images
+    htf_timeframe = None
+    htf_timeframe_id = None
+    htf_lookback_n = None
+    htf_entry_image_key = None
+    htf_exit_image_key = None
+    htf_range_image_key = None
+
+    if generate_htf:
+        htf_timeframe = get_htf_timeframe(db, strategy)
+        if htf_timeframe and htf_timeframe.id != strategy.timeframe_id:
+            htf_timeframe_id = htf_timeframe.id
+            htf_lookback_n = get_default_lookback(htf_timeframe.minutes)
+
+            # Generate HTF entry image
+            if trade.entry_ts:
+                try:
+                    htf_entry_bytes = generate_trade_image_for_timeframe(
+                        db, trade, strategy, trade.entry_ts, htf_timeframe,
+                        htf_lookback_n, ma_periods,
+                        marker_label="ENTRY", marker_color=COLOR_ENTRY
+                    )
+                    htf_entry_image_key = f"trade_images/{trade.id}/htf_entry.png"
+                    upload_image(htf_entry_image_key, htf_entry_bytes)
+                except Exception as e:
+                    print(f"Error generating HTF entry image for trade {trade.id}: {e}")
+
+            # Generate HTF exit image
+            if trade.exit_ts:
+                try:
+                    htf_exit_bytes = generate_trade_image_for_timeframe(
+                        db, trade, strategy, trade.exit_ts, htf_timeframe,
+                        htf_lookback_n, ma_periods,
+                        marker_label="EXIT", marker_color=COLOR_EXIT
+                    )
+                    htf_exit_image_key = f"trade_images/{trade.id}/htf_exit.png"
+                    upload_image(htf_exit_image_key, htf_exit_bytes)
+                except Exception as e:
+                    print(f"Error generating HTF exit image for trade {trade.id}: {e}")
+
+            # Generate HTF range image - max 256 bars
+            if trade.entry_ts and trade.exit_ts:
+                try:
+                    htf_range_bytes = generate_trade_range_image_for_timeframe(
+                        db, trade, strategy, htf_timeframe, ma_periods, max_bars=256
+                    )
+                    if htf_range_bytes:
+                        htf_range_image_key = f"trade_images/{trade.id}/htf_range.png"
+                        upload_image(htf_range_image_key, htf_range_bytes)
+                except Exception as e:
+                    print(f"Error generating HTF range image for trade {trade.id}: {e}")
+
     # Save to DB
     trade_image = TradeImage(
         trade_id=trade.id,
@@ -2751,6 +2959,11 @@ def get_or_create_trade_images(
         range_image_key=range_image_key,
         lookback_n=lookback_n,
         ma_periods=ma_periods_str,
+        htf_timeframe_id=htf_timeframe_id,
+        htf_entry_image_key=htf_entry_image_key,
+        htf_exit_image_key=htf_exit_image_key,
+        htf_range_image_key=htf_range_image_key,
+        htf_lookback_n=htf_lookback_n,
     )
     db.add(trade_image)
     db.commit()
@@ -2787,6 +3000,11 @@ def ui_trade_detail(
         except Exception as e:
             print(f"Error getting trade images: {e}")
 
+    # Get HTF timeframe info for display
+    htf_timeframe = None
+    if trade_image and trade_image.htf_timeframe_id:
+        htf_timeframe = db.query(Timeframe).filter(Timeframe.id == trade_image.htf_timeframe_id).first()
+
     # Get prev/next trades in same run
     prev_trade = (
         db.query(Trade)
@@ -2810,6 +3028,7 @@ def ui_trade_detail(
         "instrument": instrument,
         "timeframe": timeframe,
         "trade_image": trade_image,
+        "htf_timeframe": htf_timeframe,
         "prev_trade_id": prev_trade.id if prev_trade else None,
         "next_trade_id": next_trade.id if next_trade else None,
     })
@@ -2894,6 +3113,90 @@ def ui_trade_range_image(trade_id: int, db: Session = Depends(get_db)):
 
     try:
         image_bytes = get_image(trade_image.range_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)
+
+
+@router.get("/trades/{trade_id}/htf_entry.png")
+def ui_trade_htf_entry_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade HTF entry image."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.htf_entry_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.htf_entry_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.htf_entry_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)
+
+
+@router.get("/trades/{trade_id}/htf_exit.png")
+def ui_trade_htf_exit_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade HTF exit image."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.htf_exit_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.htf_exit_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.htf_exit_image_key)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception:
+        return Response(content=b"", status_code=404)
+
+
+@router.get("/trades/{trade_id}/htf_range.png")
+def ui_trade_htf_range_image(trade_id: int, db: Session = Depends(get_db)):
+    """Serve trade HTF range image."""
+    from fastapi.responses import Response
+
+    trade_image = db.query(TradeImage).filter(TradeImage.trade_id == trade_id).first()
+    if not trade_image or not trade_image.htf_range_image_key:
+        # Try to generate on the fly
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            return Response(content=b"", status_code=404)
+
+        run = db.query(BacktestRun).filter(BacktestRun.id == trade.run_id).first()
+        strategy = db.query(Strategy).filter(Strategy.id == run.strategy_id).first() if run else None
+
+        if strategy:
+            trade_image = get_or_create_trade_images(db, trade, strategy)
+
+        if not trade_image or not trade_image.htf_range_image_key:
+            return Response(content=b"", status_code=404)
+
+    try:
+        image_bytes = get_image(trade_image.htf_range_image_key)
         return Response(content=image_bytes, media_type="image/png")
     except Exception:
         return Response(content=b"", status_code=404)

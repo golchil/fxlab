@@ -337,9 +337,16 @@ class TradeImage(Base):
     range_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     lookback_n: Mapped[int] = mapped_column(Integer)
     ma_periods: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g., "5,20,60"
+    # HTF (Higher TimeFrame) images
+    htf_timeframe_id: Mapped[Optional[int]] = mapped_column(ForeignKey("timeframes.id"), nullable=True)
+    htf_entry_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    htf_exit_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    htf_range_image_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    htf_lookback_n: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     trade: Mapped["Trade"] = relationship()
+    htf_timeframe: Mapped[Optional["Timeframe"]] = relationship()
 
     __table_args__ = (
         Index("ix_trade_images_trade", "trade_id", unique=True),
