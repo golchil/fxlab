@@ -622,13 +622,31 @@ def ml_train_pattern_task(
 
         ensure_bucket_exists()
 
-        # Parse date filters
+        # Parse date filters with multiple format support
+        def parse_datetime(ts_str: str) -> datetime:
+            """Parse datetime string supporting multiple formats."""
+            formats = [
+                "%Y-%m-%d %H:%M",       # "2003-07-01 00:00"
+                "%Y-%m-%dT%H:%M:%SZ",   # "2003-07-01T00:00:00Z" (ISO8601 UTC)
+                "%Y-%m-%dT%H:%M:%S",    # "2003-07-01T00:00:00"
+                "%Y-%m-%d",             # "2003-07-01"
+            ]
+            for fmt in formats:
+                try:
+                    return datetime.strptime(ts_str, fmt)
+                except ValueError:
+                    continue
+            raise ValueError(
+                f"Invalid datetime format: '{ts_str}'. "
+                f"Examples: '2003-07-01 00:00' or '2003-07-01T00:00:00Z'"
+            )
+
         start_dt = None
         end_dt = None
         if start_ts:
-            start_dt = datetime.strptime(start_ts, "%Y-%m-%d %H:%M")
+            start_dt = parse_datetime(start_ts)
         if end_ts:
-            end_dt = datetime.strptime(end_ts, "%Y-%m-%d %H:%M")
+            end_dt = parse_datetime(end_ts)
 
         # Build base query for labeled patterns
         base_query = (
