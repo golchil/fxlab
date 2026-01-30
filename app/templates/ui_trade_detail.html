@@ -17,6 +17,7 @@
         </div>
     </div>
 
+    {# 取引情報サマリ #}
     <section class="info-section">
         <h2>取引情報</h2>
         <div class="info-grid">
@@ -51,6 +52,7 @@
         </div>
     </section>
 
+    {# エントリー/エグジット情報 #}
     <section class="info-section">
         <h2>エントリー / エグジット</h2>
         <table class="info-table">
@@ -94,82 +96,102 @@
         </div>
     </section>
 
+    {# ========== チャート画像セクション ========== #}
+
+    {# 1. 上位足（HTF）全体像 - 最初に表示 #}
+    {% if htf_timeframe %}
+    <section class="info-section chart-section htf-section">
+        <h2>上位足（{{ htf_timeframe.name }}）全体像</h2>
+        {% if trade_image and trade_image.htf_range_image_key %}
+        <p class="chart-hint">ハイライト部分が取引区間（青線: ENTRY、オレンジ線: EXIT）</p>
+        <div class="trade-range-image">
+            <img src="/ui/trades/{{ trade.id }}/htf_range.png" alt="HTF Trade Range Chart" loading="lazy">
+        </div>
+        {% else %}
+        <p class="no-image-msg">range画像なし（取引が長すぎる可能性があります）</p>
+        {% endif %}
+    </section>
+    {% endif %}
+
+    {# 2. 下位足（LTF）全体像 #}
     {% if trade_image and trade_image.range_image_key %}
-    <section class="info-section">
-        <h2>取引全体像</h2>
-        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
-            エントリーからエグジットまでの全体チャート（ハイライト部分が取引区間）
-        </p>
+    <section class="info-section chart-section ltf-section">
+        <h2>下位足（{{ timeframe.name if timeframe else "LTF" }}）全体像</h2>
+        <p class="chart-hint">ハイライト部分が取引区間（青線: ENTRY、オレンジ線: EXIT）</p>
         <div class="trade-range-image">
             <img src="/ui/trades/{{ trade.id }}/range.png" alt="Trade Range Chart" loading="lazy">
         </div>
     </section>
     {% endif %}
 
-    <section class="info-section">
-        <h2>チャート画像</h2>
-        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
-            ※ 足の開始時刻に丸めて画像を生成しています（青線: ENTRY、オレンジ線: EXIT）
-        </p>
-        <div class="trade-images">
-            <div class="trade-image-box">
-                <h3>エントリー時点</h3>
-                <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
-                {% if trade_image and trade_image.entry_image_key %}
-                <img src="/ui/trades/{{ trade.id }}/entry.png" alt="Entry Chart" loading="lazy">
-                {% else %}
-                <p class="no-image">画像なし</p>
-                {% endif %}
-            </div>
-            <div class="trade-image-box">
-                <h3>エグジット時点</h3>
-                <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
-                {% if trade_image and trade_image.exit_image_key %}
-                <img src="/ui/trades/{{ trade.id }}/exit.png" alt="Exit Chart" loading="lazy">
-                {% else %}
-                <p class="no-image">画像なし</p>
-                {% endif %}
-            </div>
-        </div>
-    </section>
-
-    {# HTF (Higher TimeFrame) Section #}
+    {# 3. 上位足 ENTRY/EXIT（折りたたみ）#}
     {% if htf_timeframe %}
-    <section class="info-section htf-section">
-        <h2>上位足チャート（{{ htf_timeframe.name }}）</h2>
-        <p style="color: var(--gray-500); font-size: 0.85rem; margin-bottom: 1rem;">
-            上位足（{{ htf_timeframe.name }}）でのエントリー/エグジット位置（青線: ENTRY、オレンジ線: EXIT）
-        </p>
-
-        {% if trade_image and trade_image.htf_range_image_key %}
-        <div class="trade-range-image" style="margin-bottom: 1.5rem;">
-            <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">取引全体像（{{ htf_timeframe.name }}）</h3>
-            <img src="/ui/trades/{{ trade.id }}/htf_range.png" alt="HTF Trade Range Chart" loading="lazy">
-        </div>
-        {% endif %}
-
-        <div class="trade-images">
-            <div class="trade-image-box">
-                <h3>エントリー時点（{{ htf_timeframe.name }}）</h3>
-                <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
-                {% if trade_image and trade_image.htf_entry_image_key %}
-                <img src="/ui/trades/{{ trade.id }}/htf_entry.png" alt="HTF Entry Chart" loading="lazy">
-                {% else %}
-                <p class="no-image">画像なし</p>
-                {% endif %}
+    <section class="info-section chart-section htf-section">
+        <details id="htf-details" class="chart-details">
+            <summary>
+                <h2>上位足（{{ htf_timeframe.name }}）ENTRY / EXIT 詳細</h2>
+            </summary>
+            <div class="details-content">
+                <p class="chart-hint">エントリー/エグジット時点のチャート詳細</p>
+                <div class="trade-images">
+                    <div class="trade-image-box">
+                        <h3>ENTRY（{{ htf_timeframe.name }}）</h3>
+                        <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
+                        {% if trade_image and trade_image.htf_entry_image_key %}
+                        <img src="/ui/trades/{{ trade.id }}/htf_entry.png" alt="HTF Entry Chart" loading="lazy">
+                        {% else %}
+                        <p class="no-image">画像なし</p>
+                        {% endif %}
+                    </div>
+                    <div class="trade-image-box">
+                        <h3>EXIT（{{ htf_timeframe.name }}）</h3>
+                        <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
+                        {% if trade_image and trade_image.htf_exit_image_key %}
+                        <img src="/ui/trades/{{ trade.id }}/htf_exit.png" alt="HTF Exit Chart" loading="lazy">
+                        {% else %}
+                        <p class="no-image">画像なし</p>
+                        {% endif %}
+                    </div>
+                </div>
             </div>
-            <div class="trade-image-box">
-                <h3>エグジット時点（{{ htf_timeframe.name }}）</h3>
-                <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
-                {% if trade_image and trade_image.htf_exit_image_key %}
-                <img src="/ui/trades/{{ trade.id }}/htf_exit.png" alt="HTF Exit Chart" loading="lazy">
-                {% else %}
-                <p class="no-image">画像なし</p>
-                {% endif %}
-            </div>
-        </div>
+        </details>
     </section>
-    {% else %}
+    {% endif %}
+
+    {# 4. 下位足 ENTRY/EXIT（折りたたみ）#}
+    <section class="info-section chart-section ltf-section">
+        <details id="ltf-details" class="chart-details">
+            <summary>
+                <h2>下位足（{{ timeframe.name if timeframe else "LTF" }}）ENTRY / EXIT 詳細</h2>
+            </summary>
+            <div class="details-content">
+                <p class="chart-hint">エントリー/エグジット時点のチャート詳細</p>
+                <div class="trade-images">
+                    <div class="trade-image-box">
+                        <h3>ENTRY（{{ timeframe.name if timeframe else "LTF" }}）</h3>
+                        <p class="image-ts">{{ trade.entry_ts.strftime('%Y-%m-%d %H:%M') if trade.entry_ts else "-" }}</p>
+                        {% if trade_image and trade_image.entry_image_key %}
+                        <img src="/ui/trades/{{ trade.id }}/entry.png" alt="Entry Chart" loading="lazy">
+                        {% else %}
+                        <p class="no-image">画像なし</p>
+                        {% endif %}
+                    </div>
+                    <div class="trade-image-box">
+                        <h3>EXIT（{{ timeframe.name if timeframe else "LTF" }}）</h3>
+                        <p class="image-ts">{{ trade.exit_ts.strftime('%Y-%m-%d %H:%M') if trade.exit_ts else "-" }}</p>
+                        {% if trade_image and trade_image.exit_image_key %}
+                        <img src="/ui/trades/{{ trade.id }}/exit.png" alt="Exit Chart" loading="lazy">
+                        {% else %}
+                        <p class="no-image">画像なし</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </details>
+    </section>
+
+    {# 上位足がない場合のメッセージ #}
+    {% if not htf_timeframe %}
     <section class="info-section">
         <h2>上位足チャート</h2>
         <p style="color: var(--gray-500);">上位足未設定（戦略にHTFパターン条件またはダウ条件がありません）</p>
@@ -187,18 +209,101 @@
 </div>
 
 <style>
+/* Range画像 */
 .trade-range-image {
     max-width: 100%;
 }
 
 .trade-range-image img {
     width: 100%;
-    max-width: 900px;
+    max-width: 1000px;
     height: auto;
     border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
+/* チャートセクション共通 */
+.chart-section {
+    margin-bottom: 1.5rem;
+}
+
+.chart-hint {
+    color: var(--gray-500);
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.no-image-msg {
+    color: var(--gray-400);
+    font-style: italic;
+    padding: 1rem;
+    background: var(--gray-50);
+    border-radius: 4px;
+}
+
+/* HTFセクション強調 */
+.htf-section {
+    border-left: 4px solid #3498db;
+    background: linear-gradient(90deg, rgba(52, 152, 219, 0.05), transparent);
+}
+
+.htf-section h2 {
+    color: #2980b9;
+}
+
+/* LTFセクション */
+.ltf-section {
+    border-left: 4px solid #27ae60;
+    background: linear-gradient(90deg, rgba(39, 174, 96, 0.05), transparent);
+}
+
+.ltf-section h2 {
+    color: #1e8449;
+}
+
+/* 折りたたみUI (details/summary) */
+.chart-details {
+    border: none;
+}
+
+.chart-details summary {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.chart-details summary::-webkit-details-marker {
+    display: none;
+}
+
+.chart-details summary h2 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+}
+
+.chart-details summary h2::before {
+    content: "▶";
+    font-size: 0.7em;
+    transition: transform 0.2s ease;
+}
+
+.chart-details[open] summary h2::before {
+    transform: rotate(90deg);
+}
+
+.chart-details summary:hover h2 {
+    opacity: 0.8;
+}
+
+.details-content {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--gray-200);
+}
+
+/* Entry/Exit画像グリッド */
 .trade-images {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
@@ -238,6 +343,7 @@
     border-radius: 4px;
 }
 
+/* 情報テーブル */
 .info-table {
     width: 100%;
     border-collapse: collapse;
@@ -258,14 +364,31 @@
     padding: 0.75rem 1.5rem;
     font-size: 1rem;
 }
-
-.htf-section {
-    border-left: 4px solid #3498db;
-    background: linear-gradient(90deg, rgba(52, 152, 219, 0.05), transparent);
-}
-
-.htf-section h2 {
-    color: #2980b9;
-}
 </style>
+
+<script>
+// LocalStorage でdetailsの開閉状態を保存・復元
+document.addEventListener('DOMContentLoaded', function() {
+    const detailsElements = document.querySelectorAll('.chart-details');
+
+    detailsElements.forEach(function(details) {
+        const key = 'trade_detail_' + details.id;
+
+        // 保存された状態を復元
+        const savedState = localStorage.getItem(key);
+        if (savedState === 'open') {
+            details.open = true;
+        }
+
+        // 開閉時に状態を保存
+        details.addEventListener('toggle', function() {
+            if (details.open) {
+                localStorage.setItem(key, 'open');
+            } else {
+                localStorage.removeItem(key);
+            }
+        });
+    });
+});
+</script>
 {% endblock %}
