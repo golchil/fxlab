@@ -3381,10 +3381,18 @@ def ui_lab_patterns(
     timeframe: Optional[str] = None,
     pattern_type: Optional[str] = None,
     sort: Optional[str] = "confirmed_ts",  # "confirmed_ts" or "ml_score"
-    min_ml_score: Optional[float] = None,
+    min_ml_score: Optional[str] = None,  # Accept as string to handle empty string
     db: Session = Depends(get_db),
 ):
     """Pattern instances listing page."""
+    # Parse min_ml_score: empty string -> None
+    min_ml_score_val: Optional[float] = None
+    if min_ml_score and min_ml_score.strip():
+        try:
+            min_ml_score_val = float(min_ml_score)
+        except ValueError:
+            min_ml_score_val = None
+
     datasets = db.query(Dataset).all()
     dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
 
@@ -3410,8 +3418,8 @@ def ui_lab_patterns(
         if pattern_type:
             query = query.filter(PatternInstance.pattern_type == pattern_type)
         # Filter by min_ml_score
-        if min_ml_score is not None:
-            query = query.filter(PatternInstance.ml_score >= min_ml_score)
+        if min_ml_score_val is not None:
+            query = query.filter(PatternInstance.ml_score >= min_ml_score_val)
         # Sort
         if sort == "ml_score":
             query = query.order_by(PatternInstance.ml_score.desc().nullslast())
@@ -3428,7 +3436,7 @@ def ui_lab_patterns(
         "selected_timeframe": timeframe or "",
         "selected_pattern_type": pattern_type or "",
         "selected_sort": sort or "confirmed_ts",
-        "selected_min_ml_score": min_ml_score,
+        "selected_min_ml_score": min_ml_score_val,
     })
 
 
