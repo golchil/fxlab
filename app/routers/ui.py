@@ -17,7 +17,7 @@ from app.tasks import (
     generate_window_images_task, generate_window_features_task, resample_bars_task, backtest_task,
     golden_cross_task, generate_swings_task, detect_patterns_task
 )
-from app.tasks_ml import ml_train_task, ml_infer_task
+from app.tasks_ml import ml_train_task, ml_infer_task, ml_train_pattern_task, ml_infer_pattern_task
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -1499,6 +1499,7 @@ def ui_create_strategy(
     ltf_pattern_type: Optional[str] = Form(None),
     ltf_pattern_lookback_minutes: Optional[str] = Form(None),
     require_ltf_breakout: Optional[str] = Form(None),
+    min_pattern_ml_score: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a strategy from form submission."""
@@ -1523,6 +1524,7 @@ def ui_create_strategy(
     ltf_pt_type = ltf_pattern_type.strip() if ltf_pattern_type and ltf_pattern_type.strip() else None
     ltf_pt_minutes = int(ltf_pattern_lookback_minutes) if ltf_pattern_lookback_minutes and ltf_pattern_lookback_minutes.strip() else 240
     ltf_breakout = require_ltf_breakout == "on"
+    min_pt_ml_score = float(min_pattern_ml_score) if min_pattern_ml_score and min_pattern_ml_score.strip() else None
 
     strategy = Strategy(
         name=name,
@@ -1558,6 +1560,7 @@ def ui_create_strategy(
         ltf_pattern_type=ltf_pt_type,
         ltf_pattern_lookback_minutes=ltf_pt_minutes,
         require_ltf_breakout=ltf_breakout,
+        min_pattern_ml_score=min_pt_ml_score,
         created_at=datetime.utcnow(),
     )
     db.add(strategy)
@@ -2332,9 +2335,10 @@ def ui_ml(request: Request, db: Session = Depends(get_db)):
 
     # Add metrics to model data
     model_list = []
+    pattern_model_list = []
     for m in models:
         metrics = json.loads(m.metrics_json) if m.metrics_json else {}
-        model_list.append({
+        model_data = {
             "id": m.id,
             "name": m.name,
             "model_type": m.model_type,
@@ -2346,13 +2350,32 @@ def ui_ml(request: Request, db: Session = Depends(get_db)):
             "auc": metrics.get("auc", 0),
             "train_samples": metrics.get("train_samples", 0),
             "val_samples": metrics.get("val_samples", 0),
-        })
+        }
+        if m.model_type == "pattern":
+            pattern_model_list.append(model_data)
+        else:
+            model_list.append(model_data)
+
+    # Count labeled patterns per dataset
+    pattern_label_counts = {}
+    for ds in datasets:
+        good_count = db.query(func.count(PatternLabel.id)).join(PatternInstance).filter(
+            PatternInstance.dataset_id == ds.id,
+            PatternLabel.label == "good"
+        ).scalar() or 0
+        bad_count = db.query(func.count(PatternLabel.id)).join(PatternInstance).filter(
+            PatternInstance.dataset_id == ds.id,
+            PatternLabel.label == "bad"
+        ).scalar() or 0
+        pattern_label_counts[ds.id] = {"good": good_count, "bad": bad_count}
 
     return templates.TemplateResponse("ui_ml.html", {
         "request": request,
         "models": model_list,
+        "pattern_models": pattern_model_list,
         "datasets": dataset_list,
         "timeframes": timeframes,
+        "pattern_label_counts": pattern_label_counts,
     })
 
 
@@ -2474,6 +2497,129 @@ def ui_ml_infer(
             limit=limit_val,
             start_ts=start_ts_val.isoformat() if start_ts_val else None,
             end_ts=end_ts_val.isoformat() if end_ts_val else None,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        return templates.TemplateResponse("ui_ml.html", {
+            "request": request,
+            "models": [],
+            "datasets": [],
+            "timeframes": [],
+            "error": str(e),
+        })
+
+
+@router.post("/ml/train-pattern")
+def ui_ml_train_pattern(
+    request: Request,
+    model_name: str = Form(...),
+    pattern_type: str = Form(...),
+    dataset_id: int = Form(...),
+    timeframe_name: str = Form(...),
+    epochs: int = Form(10),
+    batch_size: int = Form(32),
+    learning_rate: float = Form(0.001),
+    lookback_n: int = Form(128),
+    limit: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Start pattern ML training job."""
+    try:
+        limit_val = int(limit) if limit and limit.strip() else None
+
+        params = {
+            "model_name": model_name,
+            "model_type": "pattern",
+            "pattern_type": pattern_type,
+            "dataset_id": dataset_id,
+            "timeframe_name": timeframe_name,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "lookback_n": lookback_n,
+            "limit": limit_val,
+        }
+
+        job = Job(
+            dataset_id=dataset_id,
+            job_type="train_pattern",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        ml_train_pattern_task.delay(
+            job_id=job.id,
+            dataset_id=dataset_id,
+            timeframe_name=timeframe_name,
+            pattern_type=pattern_type,
+            model_name=model_name,
+            epochs=epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            lookback_n=lookback_n,
+            limit=limit_val,
+        )
+
+        return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
+
+    except Exception as e:
+        return templates.TemplateResponse("ui_ml.html", {
+            "request": request,
+            "models": [],
+            "datasets": [],
+            "timeframes": [],
+            "error": str(e),
+        })
+
+
+@router.post("/ml/infer-pattern")
+def ui_ml_infer_pattern(
+    request: Request,
+    model_id: int = Form(...),
+    dataset_id: Optional[int] = Form(None),
+    pattern_type: Optional[str] = Form(None),
+    limit: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Start pattern ML inference job."""
+    try:
+        ml_model = db.query(MLModel).filter(MLModel.id == model_id).first()
+        if not ml_model:
+            raise ValueError(f"Model {model_id} not found")
+
+        limit_val = int(limit) if limit and limit.strip() else None
+
+        # Use model's dataset if not specified
+        target_dataset_id = dataset_id if dataset_id else ml_model.dataset_id
+
+        params = {
+            "model_id": model_id,
+            "dataset_id": target_dataset_id,
+            "pattern_type": pattern_type,
+            "limit": limit_val,
+        }
+
+        job = Job(
+            dataset_id=target_dataset_id,
+            job_type="infer_pattern",
+            status="pending",
+            params=json.dumps(params),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        ml_infer_pattern_task.delay(
+            job_id=job.id,
+            model_id=model_id,
+            dataset_id=target_dataset_id,
+            pattern_type=pattern_type,
+            limit=limit_val,
         )
 
         return RedirectResponse(url=f"/ui/jobs/{job.id}", status_code=303)
@@ -3210,6 +3356,8 @@ def ui_lab_patterns(
     dataset_id: Optional[int] = None,
     timeframe: Optional[str] = None,
     pattern_type: Optional[str] = None,
+    sort: Optional[str] = "confirmed_ts",  # "confirmed_ts" or "ml_score"
+    min_ml_score: Optional[float] = None,
     db: Session = Depends(get_db),
 ):
     """Pattern instances listing page."""
@@ -3237,7 +3385,15 @@ def ui_lab_patterns(
                 query = query.filter(PatternInstance.timeframe_id == tf.id)
         if pattern_type:
             query = query.filter(PatternInstance.pattern_type == pattern_type)
-        patterns = query.order_by(PatternInstance.confirmed_ts.desc()).limit(200).all()
+        # Filter by min_ml_score
+        if min_ml_score is not None:
+            query = query.filter(PatternInstance.ml_score >= min_ml_score)
+        # Sort
+        if sort == "ml_score":
+            query = query.order_by(PatternInstance.ml_score.desc().nullslast())
+        else:
+            query = query.order_by(PatternInstance.confirmed_ts.desc())
+        patterns = query.limit(200).all()
 
     return templates.TemplateResponse("ui_lab_patterns.html", {
         "request": request,
@@ -3247,6 +3403,8 @@ def ui_lab_patterns(
         "selected_dataset_id": dataset_id,
         "selected_timeframe": timeframe or "",
         "selected_pattern_type": pattern_type or "",
+        "selected_sort": sort or "confirmed_ts",
+        "selected_min_ml_score": min_ml_score,
     })
 
 

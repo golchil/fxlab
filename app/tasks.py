@@ -992,7 +992,7 @@ def backtest_task(
 
         if htf_pattern_enabled:
             htf_pattern_lookback_td = timedelta(hours=strategy.htf_pattern_lookback_hours or 24)
-            htf_patterns_q = (
+            htf_q = (
                 db.query(
                     PatternInstance.id,
                     PatternInstance.confirmed_ts,
@@ -1006,9 +1006,11 @@ def backtest_task(
                     PatternInstance.timeframe_id == strategy.htf_pattern_timeframe_id,
                     PatternInstance.pattern_type == strategy.htf_pattern_type,
                 )
-                .order_by(PatternInstance.confirmed_ts)
-                .all()
             )
+            # min_pattern_ml_score filter
+            if strategy.min_pattern_ml_score is not None:
+                htf_q = htf_q.filter(PatternInstance.ml_score >= strategy.min_pattern_ml_score)
+            htf_patterns_q = htf_q.order_by(PatternInstance.confirmed_ts).all()
             htf_patterns = [
                 {"id": r[0], "confirmed_ts": r[1], "neckline_price": r[2], "pattern_type": r[3], "right_ts": r[4]}
                 for r in htf_patterns_q
@@ -1016,7 +1018,7 @@ def backtest_task(
 
         if ltf_pattern_enabled:
             ltf_pattern_lookback_td = timedelta(minutes=strategy.ltf_pattern_lookback_minutes or 240)
-            ltf_patterns_q = (
+            ltf_q = (
                 db.query(
                     PatternInstance.id,
                     PatternInstance.confirmed_ts,
@@ -1030,9 +1032,11 @@ def backtest_task(
                     PatternInstance.timeframe_id == strategy.ltf_pattern_timeframe_id,
                     PatternInstance.pattern_type == strategy.ltf_pattern_type,
                 )
-                .order_by(PatternInstance.confirmed_ts)
-                .all()
             )
+            # min_pattern_ml_score filter
+            if strategy.min_pattern_ml_score is not None:
+                ltf_q = ltf_q.filter(PatternInstance.ml_score >= strategy.min_pattern_ml_score)
+            ltf_patterns_q = ltf_q.order_by(PatternInstance.confirmed_ts).all()
             ltf_patterns = [
                 {"id": r[0], "confirmed_ts": r[1], "neckline_price": r[2], "pattern_type": r[3], "right_ts": r[4]}
                 for r in ltf_patterns_q

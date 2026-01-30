@@ -6,8 +6,9 @@
 <div class="container">
     <h1>機械学習</h1>
 
+    {# Entry/Profit Model Training #}
     <div class="section">
-        <h2>モデル学習</h2>
+        <h2>エントリー/勝敗モデル学習</h2>
         <form action="/ui/ml/train" method="post" class="form-grid">
             <div class="form-row">
                 <label>モデル名:</label>
@@ -66,9 +67,82 @@
         </form>
     </div>
 
+    {# Pattern Model Training #}
+    <div class="section pattern-section">
+        <h2>パターン判定モデル学習</h2>
+        <p style="color: var(--gray-500); font-size: 0.9rem; margin-bottom: 1rem;">
+            pattern_labels (good/bad) を教師にして、ダブルボトム/トップの質を判定するモデルを学習します。
+        </p>
+
+        {# Show label counts per dataset #}
+        <div class="info-box" style="margin-bottom: 1rem;">
+            <strong>ラベル済みパターン数:</strong>
+            <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+                {% for ds in datasets %}
+                {% set counts = pattern_label_counts.get(ds.id, {"good": 0, "bad": 0}) %}
+                <li>{{ ds.name }}: good={{ counts.good }}, bad={{ counts.bad }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <form action="/ui/ml/train-pattern" method="post" class="form-grid">
+            <div class="form-row">
+                <label>モデル名:</label>
+                <input type="text" name="model_name" required placeholder="例: pattern-db-h1-v1">
+            </div>
+            <div class="form-row">
+                <label>パターンタイプ:</label>
+                <select name="pattern_type" required>
+                    <option value="double_bottom">double_bottom - ダブルボトム</option>
+                    <option value="double_top">double_top - ダブルトップ</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>データセット:</label>
+                <select name="dataset_id" required>
+                    {% for ds in datasets %}
+                    <option value="{{ ds.id }}">{{ ds.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>タイムフレーム:</label>
+                <select name="timeframe_name" required>
+                    {% for tf in timeframes %}
+                    <option value="{{ tf.name }}" {% if tf.name == "H1" %}selected{% endif %}>{{ tf.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>lookback_n:</label>
+                <input type="number" name="lookback_n" value="72" min="20" max="256">
+            </div>
+            <div class="form-row">
+                <label>エポック数:</label>
+                <input type="number" name="epochs" value="10" min="1" max="100">
+            </div>
+            <div class="form-row">
+                <label>バッチサイズ:</label>
+                <input type="number" name="batch_size" value="32" min="8" max="128">
+            </div>
+            <div class="form-row">
+                <label>学習率:</label>
+                <input type="text" name="learning_rate" value="0.001">
+            </div>
+            <div class="form-row">
+                <label>上限件数:</label>
+                <input type="text" name="limit" placeholder="任意">
+            </div>
+            <div class="form-row">
+                <button type="submit" class="btn btn-primary">パターン学習開始</button>
+            </div>
+        </form>
+    </div>
+
+    {# Entry/Profit Inference #}
     {% if models %}
     <div class="section">
-        <h2>推論実行</h2>
+        <h2>エントリー/勝敗モデル推論</h2>
         <form action="/ui/ml/infer" method="post" class="form-grid">
             <div class="form-row">
                 <label>モデル:</label>
@@ -106,8 +180,53 @@
     </div>
     {% endif %}
 
+    {# Pattern Inference #}
+    {% if pattern_models %}
+    <div class="section pattern-section">
+        <h2>パターンモデル推論</h2>
+        <p style="color: var(--gray-500); font-size: 0.9rem; margin-bottom: 1rem;">
+            学習済みパターンモデルで pattern_instances にスコアを付与します。
+        </p>
+        <form action="/ui/ml/infer-pattern" method="post" class="form-grid">
+            <div class="form-row">
+                <label>モデル:</label>
+                <select name="model_id" required>
+                    {% for m in pattern_models %}
+                    <option value="{{ m.id }}">{{ m.name }} ({{ m.label_source }}, Acc: {{ (m.accuracy * 100)|round(1) }}%)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>対象データセット:</label>
+                <select name="dataset_id">
+                    <option value="">モデルと同じ</option>
+                    {% for ds in datasets %}
+                    <option value="{{ ds.id }}">{{ ds.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label>パターンタイプ:</label>
+                <select name="pattern_type">
+                    <option value="">モデルと同じ</option>
+                    <option value="double_bottom">double_bottom</option>
+                    <option value="double_top">double_top</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>上限件数:</label>
+                <input type="text" name="limit" placeholder="任意">
+            </div>
+            <div class="form-row">
+                <button type="submit" class="btn btn-primary">パターン推論実行</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
+    {# Entry/Profit Models List #}
     <div class="section">
-        <h2>モデル一覧</h2>
+        <h2>エントリー/勝敗モデル一覧</h2>
         {% if models %}
         <table class="data-table">
             <thead>
@@ -142,13 +261,68 @@
         {% endif %}
     </div>
 
+    {# Pattern Models List #}
+    <div class="section pattern-section">
+        <h2>パターン判定モデル一覧</h2>
+        {% if pattern_models %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>名前</th>
+                    <th>パターン</th>
+                    <th>学習データ</th>
+                    <th>精度</th>
+                    <th>AUC</th>
+                    <th>作成日時</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in pattern_models %}
+                <tr>
+                    <td>{{ m.id }}</td>
+                    <td><a href="/ui/ml/{{ m.id }}">{{ m.name }}</a></td>
+                    <td>{{ m.label_source }}</td>
+                    <td>{{ m.train_samples }} / {{ m.val_samples }}</td>
+                    <td>{{ (m.accuracy * 100)|round(1) }}%</td>
+                    <td>{{ (m.auc * 100)|round(1) }}%</td>
+                    <td>{{ m.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-state">パターンモデルがありません。パターン学習を実行してください。</p>
+        {% endif %}
+    </div>
+
     <div class="section">
         <h3>使い方</h3>
         <div class="info-section">
             <p><strong>entry モデル:</strong> 実験室で登録したgoodエントリーポイントを正例、ランダムなウィンドウを負例として学習します。</p>
             <p><strong>profit モデル:</strong> TP/SLラベルから勝ち(tp_hit)と負け(sl_hit)を2クラス分類で学習します。</p>
-            <p><strong>推論後:</strong> データセットの画像ギャラリーでスコア順に並べ替えができます。</p>
+            <p><strong>pattern モデル:</strong> pattern_labels の good/bad を教師に、パターンの質を判定するモデルを学習します。</p>
+            <p><strong>推論後:</strong> データセットの画像ギャラリーでスコア順並べ替え、パターン一覧でml_scoreソートができます。</p>
         </div>
     </div>
 </div>
+
+<style>
+.pattern-section {
+    border-left: 4px solid #9b59b6;
+    padding-left: 1rem;
+    background: linear-gradient(90deg, rgba(155, 89, 182, 0.05), transparent);
+}
+
+.pattern-section h2 {
+    color: #8e44ad;
+}
+
+.info-box {
+    background: var(--gray-50);
+    border: 1px solid var(--gray-200);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+}
+</style>
 {% endblock %}

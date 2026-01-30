@@ -131,6 +131,12 @@
                     {% endif %}
                 </span>
             </div>
+            {% if strategy.min_pattern_ml_score is not none %}
+            <div class="info-item">
+                <label>パターンML最低スコア</label>
+                <span>{{ "%.2f"|format(strategy.min_pattern_ml_score) }}</span>
+            </div>
+            {% endif %}
             {% if pattern_warning %}
             <div class="info-item" style="grid-column: 1 / -1;">
                 <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 0.75rem; border-radius: 4px; color: #856404;">

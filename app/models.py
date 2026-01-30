@@ -266,6 +266,7 @@ class Strategy(Base):
     ltf_pattern_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     ltf_pattern_lookback_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     require_ltf_breakout: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
+    min_pattern_ml_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # パターンML閾値
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="strategies")

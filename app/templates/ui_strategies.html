@@ -298,6 +298,12 @@
                         </label>
                         <small style="color: #666; display: block;">チェック時: LTFネックライン上/下抜けでエントリー</small>
                     </div>
+                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid #ddd;">
+                    <div class="form-group">
+                        <label for="min_pattern_ml_score">パターンML最低スコア</label>
+                        <input type="number" id="min_pattern_ml_score" name="min_pattern_ml_score" step="0.01" min="0" max="1" placeholder="例: 0.7">
+                        <small style="color: #666; display: block;">パターン推論後、指定スコア以上のパターンのみ使用</small>
+                    </div>
                 </div>
             </div>
             <div style="margin-top: 1rem;">

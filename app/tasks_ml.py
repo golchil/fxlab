@@ -8,7 +8,8 @@ from typing import Optional, List, Tuple
 from app.tasks import celery_app
 from app.database import SessionLocal
 from app.models import (
-    Job, Dataset, Timeframe, Window, WindowImage, Label, EntryPoint, MLModel, MLScore
+    Job, Dataset, Timeframe, Window, WindowImage, Label, EntryPoint, MLModel, MLScore,
+    PatternInstance, PatternLabel, Bar, Instrument
 )
 from app.config import settings
 
@@ -537,6 +538,436 @@ def ml_infer_task(
         if scores_batch:
             db.bulk_save_objects(scores_batch)
             db.commit()
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "scored_count": scored_count,
+            "model_id": model_id,
+            "dataset_id": dataset_id,
+        })
+        db.commit()
+
+        return {"scored_count": scored_count}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def ml_train_pattern_task(
+    self, job_id: int, dataset_id: int, timeframe_name: str,
+    pattern_type: str,  # "double_bottom" or "double_top"
+    model_name: str,
+    epochs: int = 10,
+    batch_size: int = 32,
+    learning_rate: float = 0.001,
+    lookback_n: int = 128,
+    limit: int = None,
+):
+    """
+    Train a CNN model for pattern classification using pattern_labels.
+
+    Uses pattern_labels.good as positive, pattern_labels.bad as negative.
+    Generates window images centered at pattern's right_ts.
+    """
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torchvision import models, transforms
+    from torch.utils.data import Dataset as TorchDataset, DataLoader
+    from PIL import Image
+    from app.services.minio_client import get_image, upload_image, ensure_bucket_exists
+    from app.services.image_generator import generate_candlestick_image
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        tf = db.query(Timeframe).filter(Timeframe.name == timeframe_name).first()
+        if not tf:
+            raise ValueError(f"Timeframe {timeframe_name} not found")
+
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset {dataset_id} not found")
+
+        ensure_bucket_exists()
+
+        # Get labeled patterns
+        labeled_patterns = (
+            db.query(PatternInstance, PatternLabel)
+            .join(PatternLabel, PatternLabel.pattern_id == PatternInstance.id)
+            .filter(
+                PatternInstance.dataset_id == dataset_id,
+                PatternInstance.timeframe_id == tf.id,
+                PatternInstance.pattern_type == pattern_type,
+                PatternLabel.label.in_(["good", "bad"]),
+            )
+            .all()
+        )
+
+        if len(labeled_patterns) < 10:
+            raise ValueError(f"Not enough labeled patterns: {len(labeled_patterns)} (need at least 10)")
+
+        # Build training data: generate/get window images for each pattern
+        samples = []
+        ma_periods = [5, 20, 60]
+
+        for pattern, label in labeled_patterns:
+            # Get bars ending at right_ts
+            bars = (
+                db.query(Bar)
+                .filter(
+                    Bar.dataset_id == dataset_id,
+                    Bar.instrument_id == pattern.instrument_id,
+                    Bar.timeframe_id == tf.id,
+                    Bar.ts <= pattern.right_ts,
+                )
+                .order_by(Bar.ts.desc())
+                .limit(lookback_n)
+                .all()
+            )
+
+            if len(bars) < 20:
+                continue
+
+            bars = list(reversed(bars))
+            bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+            try:
+                img_bytes = generate_candlestick_image(bar_data, ma_periods=ma_periods)
+                # Cache pattern image
+                image_key = f"pattern_images/{pattern.id}/{tf.name}.png"
+                upload_image(image_key, img_bytes)
+                label_val = 1 if label.label == "good" else 0
+                samples.append((image_key, label_val))
+            except Exception as e:
+                print(f"Error generating image for pattern {pattern.id}: {e}")
+                continue
+
+        if len(samples) < 10:
+            raise ValueError(f"Not enough samples with images: {len(samples)}")
+
+        random.shuffle(samples)
+        if limit:
+            samples = samples[:limit]
+
+        # Split train/val (80/20)
+        split_idx = int(len(samples) * 0.8)
+        train_data = samples[:split_idx]
+        val_data = samples[split_idx:]
+
+        # Define transforms
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        # Custom dataset class
+        class ImageDataset(TorchDataset):
+            def __init__(self, data_list, transform):
+                self.data = data_list
+                self.transform = transform
+
+            def __len__(self):
+                return len(self.data)
+
+            def __getitem__(self, idx):
+                image_key, label = self.data[idx]
+                try:
+                    img_bytes = get_image(image_key)
+                    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                    img = self.transform(img)
+                    return img, label
+                except Exception:
+                    return torch.zeros(3, 224, 224), label
+
+        train_dataset = ImageDataset(train_data, transform)
+        val_dataset = ImageDataset(val_data, transform)
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+        # Create model (ResNet18 pretrained)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        model.fc = nn.Linear(model.fc.in_features, 2)
+        model = model.to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+        # Training loop
+        best_val_acc = 0.0
+        best_model_state = None
+        train_losses = []
+        val_accs = []
+
+        for epoch in range(epochs):
+            model.train()
+            running_loss = 0.0
+            for images, labels in train_loader:
+                images, labels = images.to(device), labels.to(device)
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+
+            avg_loss = running_loss / len(train_loader) if train_loader else 0
+            train_losses.append(avg_loss)
+
+            # Validation
+            model.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for images, labels in val_loader:
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images)
+                    _, predicted = torch.max(outputs.data, 1)
+                    total += labels.size(0)
+                    correct += (predicted == labels).sum().item()
+
+            val_acc = correct / total if total > 0 else 0
+            val_accs.append(val_acc)
+
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_model_state = model.state_dict().copy()
+
+        # Save best model to MinIO
+        if best_model_state is None:
+            best_model_state = model.state_dict()
+
+        model_buffer = io.BytesIO()
+        torch.save(best_model_state, model_buffer)
+        model_bytes = model_buffer.getvalue()
+
+        artifact_key = f"ml_models/dataset_{dataset_id}/pattern_{pattern_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pt"
+        upload_image(artifact_key, model_bytes, content_type="application/octet-stream")
+
+        # Calculate final metrics
+        model.load_state_dict(best_model_state)
+        model.eval()
+
+        all_preds = []
+        all_labels = []
+        all_probs = []
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                probs = torch.softmax(outputs, dim=1)
+                _, predicted = torch.max(outputs.data, 1)
+                all_preds.extend(predicted.cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+                all_probs.extend(probs[:, 1].cpu().tolist())
+
+        try:
+            auc = _calculate_auc(all_labels, all_probs)
+        except Exception:
+            auc = 0.0
+
+        metrics = {
+            "train_samples": len(train_data),
+            "val_samples": len(val_data),
+            "epochs": epochs,
+            "best_val_accuracy": round(best_val_acc, 4),
+            "final_train_loss": round(train_losses[-1], 4) if train_losses else 0,
+            "auc": round(auc, 4),
+        }
+
+        config = {
+            "model_type": "pattern",
+            "pattern_type": pattern_type,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "lookback_n": lookback_n,
+            "architecture": "resnet18",
+        }
+
+        # Save model to database
+        ml_model = MLModel(
+            name=model_name,
+            model_type="pattern",
+            dataset_id=dataset_id,
+            timeframe_id=tf.id,
+            label_source=f"pattern_labels_{pattern_type}",
+            config_json=json.dumps(config),
+            metrics_json=json.dumps(metrics),
+            artifact_key=artifact_key,
+            created_at=datetime.utcnow(),
+        )
+        db.add(ml_model)
+        db.commit()
+        db.refresh(ml_model)
+
+        job.status = "completed"
+        job.result = json.dumps({
+            "model_id": ml_model.id,
+            "metrics": metrics,
+        })
+        db.commit()
+
+        return {"model_id": ml_model.id, "metrics": metrics}
+
+    except Exception as e:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def ml_infer_pattern_task(
+    self, job_id: int, model_id: int,
+    dataset_id: int = None,
+    pattern_type: str = None,
+    limit: int = None,
+):
+    """
+    Run inference on pattern_instances and save ml_score to each pattern.
+    """
+    import torch
+    import torch.nn as nn
+    from torchvision import models, transforms
+    from PIL import Image
+    from app.services.minio_client import get_image
+    from app.services.image_generator import generate_candlestick_image
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        job.status = "running"
+        job.celery_task_id = self.request.id
+        db.commit()
+
+        ml_model = db.query(MLModel).filter(MLModel.id == model_id).first()
+        if not ml_model:
+            raise ValueError(f"Model {model_id} not found")
+
+        if not ml_model.artifact_key:
+            raise ValueError(f"Model {model_id} has no artifact")
+
+        # Get model config
+        config = json.loads(ml_model.config_json) if ml_model.config_json else {}
+        model_pattern_type = config.get("pattern_type")
+        lookback_n = config.get("lookback_n", 128)
+
+        # Use model's dataset if not specified
+        if dataset_id is None:
+            dataset_id = ml_model.dataset_id
+
+        # Use model's pattern_type if not specified
+        if pattern_type is None:
+            pattern_type = model_pattern_type
+
+        # Load model
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = models.resnet18(weights=None)
+        model.fc = nn.Linear(model.fc.in_features, 2)
+
+        model_bytes = get_image(ml_model.artifact_key)
+        model_buffer = io.BytesIO(model_bytes)
+        state_dict = torch.load(model_buffer, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+        model = model.to(device)
+        model.eval()
+
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        # Get patterns to score
+        query = db.query(PatternInstance).filter(
+            PatternInstance.dataset_id == dataset_id,
+            PatternInstance.timeframe_id == ml_model.timeframe_id,
+        )
+        if pattern_type:
+            query = query.filter(PatternInstance.pattern_type == pattern_type)
+        if limit:
+            query = query.limit(limit)
+
+        patterns = query.all()
+
+        if not patterns:
+            job.status = "completed"
+            job.result = json.dumps({"scored_count": 0, "message": "No patterns found"})
+            db.commit()
+            return {"scored_count": 0}
+
+        # Run inference
+        scored_count = 0
+        ma_periods = [5, 20, 60]
+
+        with torch.no_grad():
+            for pattern in patterns:
+                try:
+                    # Check if cached image exists
+                    image_key = f"pattern_images/{pattern.id}/{ml_model.timeframe.name}.png"
+                    try:
+                        img_bytes = get_image(image_key)
+                    except Exception:
+                        # Generate image on the fly
+                        bars = (
+                            db.query(Bar)
+                            .filter(
+                                Bar.dataset_id == dataset_id,
+                                Bar.instrument_id == pattern.instrument_id,
+                                Bar.timeframe_id == ml_model.timeframe_id,
+                                Bar.ts <= pattern.right_ts,
+                            )
+                            .order_by(Bar.ts.desc())
+                            .limit(lookback_n)
+                            .all()
+                        )
+
+                        if len(bars) < 20:
+                            continue
+
+                        bars = list(reversed(bars))
+                        bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+                        img_bytes = generate_candlestick_image(bar_data, ma_periods=ma_periods)
+
+                    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                    img_tensor = transform(img).unsqueeze(0).to(device)
+
+                    output = model(img_tensor)
+                    probs = torch.softmax(output, dim=1)
+                    score = probs[0, 1].item()  # Probability of "good"
+
+                    # Update pattern's ml_score
+                    pattern.ml_score = round(score, 4)
+                    scored_count += 1
+
+                    if scored_count % 100 == 0:
+                        db.commit()
+
+                except Exception as e:
+                    print(f"Error scoring pattern {pattern.id}: {e}")
+                    continue
+
+        db.commit()
 
         job.status = "completed"
         job.result = json.dumps({
