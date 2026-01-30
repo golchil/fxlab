@@ -49,6 +49,16 @@
                    value="{{ selected_min_ml_score if selected_min_ml_score is not none else '' }}"
                    placeholder="0.0-1.0" style="width: 80px;">
         </div>
+        <div class="form-group">
+            <label for="label_filter">ラベル</label>
+            <select id="label_filter" name="label_filter">
+                <option value="all" {{ "selected" if selected_label_filter == "all" }}>全て</option>
+                <option value="good" {{ "selected" if selected_label_filter == "good" }}>Good</option>
+                <option value="bad" {{ "selected" if selected_label_filter == "bad" }}>Bad</option>
+                <option value="unlabeled" {{ "selected" if selected_label_filter == "unlabeled" }}>未ラベル</option>
+                <option value="mixed" {{ "selected" if selected_label_filter == "mixed" }}>Mixed</option>
+            </select>
+        </div>
         <button type="submit" class="btn btn-primary">フィルタ</button>
     </form>
 
@@ -60,6 +70,7 @@
                 <tr>
                     <th>ID</th>
                     <th>パターン</th>
+                    <th>ラベル</th>
                     <th>確定時刻</th>
                     <th>左</th>
                     <th>右</th>
@@ -69,7 +80,8 @@
                 </tr>
             </thead>
             <tbody>
-                {% for p in patterns %}
+                {% for item in patterns %}
+                {% set p = item.pattern %}
                 <tr>
                     <td>{{ p.id }}</td>
                     <td>
@@ -78,6 +90,20 @@
                         {% else %}
                         <span style="color: var(--danger); font-weight: 500;">M (ダブルトップ)</span>
                         {% endif %}
+                    </td>
+                    <td>
+                        {% if item.label_status == "good" %}
+                        <span class="label-badge label-good">Good</span>
+                        {% elif item.label_status == "bad" %}
+                        <span class="label-badge label-bad">Bad</span>
+                        {% elif item.label_status == "mixed" %}
+                        <span class="label-badge label-mixed">Mixed</span>
+                        {% else %}
+                        <span class="label-badge label-unlabeled">未ラベル</span>
+                        {% endif %}
+                        <small style="color: var(--gray-500); margin-left: 4px;">
+                            ({{ item.good_count }}/{{ item.bad_count }})
+                        </small>
                     </td>
                     <td>{{ p.confirmed_ts.strftime('%Y-%m-%d %H:%M') }}</td>
                     <td>{{ "%.5f"|format(p.left_price) }}</td>
@@ -106,4 +132,30 @@
     <p class="empty-state">パターンがありません。データセット詳細ページからパターン検出を実行してください。</p>
     {% endif %}
 </div>
+
+<style>
+.label-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.label-good {
+    background: #d4edda;
+    color: #155724;
+}
+.label-bad {
+    background: #f8d7da;
+    color: #721c24;
+}
+.label-mixed {
+    background: #fff3cd;
+    color: #856404;
+}
+.label-unlabeled {
+    background: #e9ecef;
+    color: #6c757d;
+}
+</style>
 {% endblock %}

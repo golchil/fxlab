@@ -3382,6 +3382,7 @@ def ui_lab_patterns(
     pattern_type: Optional[str] = None,
     sort: Optional[str] = "confirmed_ts",  # "confirmed_ts" or "ml_score"
     min_ml_score: Optional[str] = None,  # Accept as string to handle empty string
+    label_filter: Optional[str] = None,  # "good", "bad", "unlabeled", "mixed", "all"
     db: Session = Depends(get_db),
 ):
     """Pattern instances listing page."""
@@ -3392,6 +3393,14 @@ def ui_lab_patterns(
             min_ml_score_val = float(min_ml_score)
         except ValueError:
             min_ml_score_val = None
+
+    # Normalize label_filter
+    if label_filter and label_filter.strip():
+        label_filter = label_filter.strip()
+        if label_filter not in ("good", "bad", "unlabeled", "mixed", "all"):
+            label_filter = "all"
+    else:
+        label_filter = "all"
 
     datasets = db.query(Dataset).all()
     dataset_list = [{"id": ds.id, "name": ds.name} for ds in datasets]
@@ -3408,9 +3417,40 @@ def ui_lab_patterns(
         )
         timeframes = [tf[0] for tf in tf_names]
 
-    patterns = []
+    patterns_with_labels = []
     if dataset_id:
-        query = db.query(PatternInstance).filter(PatternInstance.dataset_id == dataset_id)
+        # Subquery to count good/bad labels per pattern
+        good_count_sq = (
+            db.query(
+                PatternLabel.pattern_id,
+                func.count(PatternLabel.id).label("good_count")
+            )
+            .filter(PatternLabel.label == "good")
+            .group_by(PatternLabel.pattern_id)
+            .subquery()
+        )
+        bad_count_sq = (
+            db.query(
+                PatternLabel.pattern_id,
+                func.count(PatternLabel.id).label("bad_count")
+            )
+            .filter(PatternLabel.label == "bad")
+            .group_by(PatternLabel.pattern_id)
+            .subquery()
+        )
+
+        # Main query with LEFT JOIN to label counts
+        query = (
+            db.query(
+                PatternInstance,
+                func.coalesce(good_count_sq.c.good_count, 0).label("good_count"),
+                func.coalesce(bad_count_sq.c.bad_count, 0).label("bad_count"),
+            )
+            .outerjoin(good_count_sq, PatternInstance.id == good_count_sq.c.pattern_id)
+            .outerjoin(bad_count_sq, PatternInstance.id == bad_count_sq.c.pattern_id)
+            .filter(PatternInstance.dataset_id == dataset_id)
+        )
+
         if timeframe:
             tf = db.query(Timeframe).filter(Timeframe.name == timeframe).first()
             if tf:
@@ -3420,23 +3460,67 @@ def ui_lab_patterns(
         # Filter by min_ml_score
         if min_ml_score_val is not None:
             query = query.filter(PatternInstance.ml_score >= min_ml_score_val)
+
+        # Filter by label status
+        if label_filter == "good":
+            query = query.filter(
+                func.coalesce(good_count_sq.c.good_count, 0) > 0,
+                func.coalesce(bad_count_sq.c.bad_count, 0) == 0
+            )
+        elif label_filter == "bad":
+            query = query.filter(
+                func.coalesce(bad_count_sq.c.bad_count, 0) > 0,
+                func.coalesce(good_count_sq.c.good_count, 0) == 0
+            )
+        elif label_filter == "unlabeled":
+            query = query.filter(
+                func.coalesce(good_count_sq.c.good_count, 0) == 0,
+                func.coalesce(bad_count_sq.c.bad_count, 0) == 0
+            )
+        elif label_filter == "mixed":
+            query = query.filter(
+                func.coalesce(good_count_sq.c.good_count, 0) > 0,
+                func.coalesce(bad_count_sq.c.bad_count, 0) > 0
+            )
+
         # Sort
         if sort == "ml_score":
             query = query.order_by(PatternInstance.ml_score.desc().nullslast())
         else:
             query = query.order_by(PatternInstance.confirmed_ts.desc())
-        patterns = query.limit(200).all()
+
+        results = query.limit(200).all()
+
+        # Build pattern list with label info
+        for pattern, good_count, bad_count in results:
+            # Determine label status
+            if good_count > 0 and bad_count == 0:
+                label_status = "good"
+            elif bad_count > 0 and good_count == 0:
+                label_status = "bad"
+            elif good_count > 0 and bad_count > 0:
+                label_status = "mixed"
+            else:
+                label_status = "unlabeled"
+
+            patterns_with_labels.append({
+                "pattern": pattern,
+                "good_count": good_count,
+                "bad_count": bad_count,
+                "label_status": label_status,
+            })
 
     return templates.TemplateResponse("ui_lab_patterns.html", {
         "request": request,
         "datasets": dataset_list,
         "timeframes": timeframes,
-        "patterns": patterns,
+        "patterns": patterns_with_labels,
         "selected_dataset_id": dataset_id,
         "selected_timeframe": timeframe or "",
         "selected_pattern_type": pattern_type or "",
         "selected_sort": sort or "confirmed_ts",
         "selected_min_ml_score": min_ml_score_val,
+        "selected_label_filter": label_filter,
     })
 
 
