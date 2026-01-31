@@ -1,0 +1,14 @@
+# ML dependencies overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d --build
+services:
+  api:
+    build:
+      context: .
+      args:
+        INSTALL_ML: "true"
+
+  worker:
+    build:
+      context: .
+      args:
+        INSTALL_ML: "true"

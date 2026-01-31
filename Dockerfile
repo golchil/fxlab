@@ -12,6 +12,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional: Install ML dependencies (torch/torchvision)
+ARG INSTALL_ML=false
+COPY requirements-ml.txt .
+RUN if [ "$INSTALL_ML" = "true" ]; then \
+        pip install --no-cache-dir -r requirements-ml.txt; \
+    fi
+
 COPY . .
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

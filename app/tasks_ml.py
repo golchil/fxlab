@@ -5,6 +5,8 @@ import random
 from datetime import datetime
 from typing import Optional, List, Tuple
 
+from sqlalchemy import func
+
 from app.tasks import celery_app
 from app.database import SessionLocal
 from app.models import (
@@ -12,6 +14,19 @@ from app.models import (
     PatternInstance, PatternLabel, Bar, Instrument
 )
 from app.config import settings
+
+
+def _check_torch_available():
+    """Check if PyTorch is available, raise helpful error if not."""
+    try:
+        import torch
+        return True
+    except ImportError:
+        raise ImportError(
+            "PyTorch is not installed. ML features require torch/torchvision. "
+            "Install with: pip install -r requirements-ml.txt "
+            "or rebuild with: docker compose up -d --build (with INSTALL_ML=true)"
+        )
 
 
 @celery_app.task(bind=True)

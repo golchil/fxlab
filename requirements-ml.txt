@@ -1,0 +1,4 @@
+# ML dependencies (optional)
+# Install with: pip install -r requirements-ml.txt
+torch>=2.0.0
+torchvision>=0.15.0
