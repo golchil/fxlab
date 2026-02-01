@@ -427,7 +427,7 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "breadcrumbs": [
             {"label": "ホーム", "url": "/ui"},
             {"label": "データセット", "url": "/ui/datasets"},
-            {"label": dataset_data.name, "url": None},
+            {"label": dataset_data.get("name", ""), "url": None},
         ],
     })
 

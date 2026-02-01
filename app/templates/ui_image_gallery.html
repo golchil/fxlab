@@ -47,7 +47,7 @@
         <a href="/ui/datasets/{{ dataset.id }}/images/{{ img.id }}?label={{ label }}{{ feat_qs }}" class="gallery-item">
             <img src="{{ img.image_url }}" alt="Window {{ img.window_id }}" loading="lazy">
             <div class="gallery-item-info">
-                <span class="gallery-ts">{{ img.end_ts.strftime('%Y-%m-%d %H:%M') }}</span>
+                <span class="gallery-ts">{{ img.end_ts.strftime('%Y-%m-%d %H:%M') if img.end_ts else '-' }}</span>
                 {% if img.score is not none %}
                 <span class="score-badge">{{ img.score }}</span>
                 {% endif %}
