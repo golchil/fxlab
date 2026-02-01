@@ -65,6 +65,45 @@ nav a:hover {
     color: white;
 }
 
+nav a.nav-active {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+/* Breadcrumb */
+.breadcrumb-container {
+    background: var(--gray-100);
+    border-bottom: 1px solid var(--gray-200);
+    padding: 0.5rem 1rem;
+}
+
+.breadcrumb {
+    max-width: 1200px;
+    margin: 0 auto;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.breadcrumb a {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+.breadcrumb a:hover {
+    text-decoration: underline;
+}
+
+.breadcrumb-sep {
+    color: var(--gray-400);
+}
+
+.breadcrumb-current {
+    color: var(--gray-600);
+}
+
 /* Main */
 main {
     min-height: calc(100vh - 56px - 48px);
@@ -131,6 +170,187 @@ h3 {
 
 .card p {
     color: var(--gray-500);
+}
+
+.card h3 {
+    color: var(--primary);
+    margin-bottom: 0.5rem;
+}
+
+/* Getting Started */
+.getting-started {
+    margin-bottom: 2rem;
+}
+
+.guide-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1rem;
+}
+
+.guide-card {
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+.guide-card h3 {
+    color: var(--primary);
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+}
+
+.guide-card p {
+    color: var(--gray-500);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.guide-steps {
+    list-style: none;
+    counter-reset: step;
+    padding: 0;
+    margin: 0;
+}
+
+.guide-steps li {
+    counter-increment: step;
+    padding: 0.5rem 0;
+    padding-left: 2rem;
+    position: relative;
+    border-bottom: 1px dashed var(--gray-200);
+}
+
+.guide-steps li:last-child {
+    border-bottom: none;
+}
+
+.guide-steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+.guide-steps a {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.guide-steps a:hover {
+    text-decoration: underline;
+}
+
+.quick-links {
+    margin-top: 2rem;
+}
+
+.quick-links h2 {
+    margin-bottom: 1rem;
+}
+
+/* Step Progress */
+.step-progress {
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.step-progress h2 {
+    margin-bottom: 1rem;
+}
+
+.progress-steps {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.progress-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem;
+    border-radius: 8px;
+    background: var(--gray-50);
+    border: 2px solid var(--gray-200);
+    min-width: 100px;
+    text-align: center;
+}
+
+.progress-step.completed {
+    border-color: var(--success);
+    background: #f0fdf4;
+}
+
+.progress-step.pending {
+    border-color: var(--warning);
+    background: #fffbeb;
+}
+
+.progress-step.disabled {
+    opacity: 0.5;
+}
+
+.step-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: var(--gray-300);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+.progress-step.completed .step-icon {
+    background: var(--success);
+}
+
+.progress-step.pending .step-icon {
+    background: var(--warning);
+}
+
+.step-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.step-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.step-count {
+    font-size: 0.8rem;
+    color: var(--gray-500);
+}
+
+.step-action {
+    margin-top: 0.5rem;
+}
+
+.progress-arrow {
+    color: var(--gray-400);
+    font-size: 1.25rem;
 }
 
 /* Buttons */

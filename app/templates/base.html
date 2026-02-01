@@ -11,15 +11,31 @@
         <nav>
             <a href="/ui" class="logo">FXLab</a>
             <ul>
-                <li><a href="/ui/datasets">Datasets</a></li>
-                <li><a href="/ui/strategies">手法</a></li>
-                <li><a href="/ui/lab">実験室</a></li>
-                <li><a href="/ui/ml">ML</a></li>
-                <li><a href="/ui/import">Import CSV</a></li>
-                <li><a href="/docs" target="_blank">API Docs</a></li>
+                <li><a href="/ui" {% if nav_active == 'home' %}class="nav-active"{% endif %}>ホーム</a></li>
+                <li><a href="/ui/import" {% if nav_active == 'import' %}class="nav-active"{% endif %}>インポート</a></li>
+                <li><a href="/ui/datasets" {% if nav_active == 'datasets' %}class="nav-active"{% endif %}>データセット</a></li>
+                <li><a href="/ui/datasets" {% if nav_active == 'gallery' %}class="nav-active"{% endif %}>ギャラリー</a></li>
+                <li><a href="/ui/strategies" {% if nav_active == 'strategies' %}class="nav-active"{% endif %}>手法</a></li>
+                <li><a href="/ui/ml" {% if nav_active == 'ml' %}class="nav-active"{% endif %}>ML</a></li>
+                <li><a href="/ui/lab" {% if nav_active == 'lab' %}class="nav-active"{% endif %}>実験室</a></li>
+                <li><a href="/docs" target="_blank">API</a></li>
             </ul>
         </nav>
     </header>
+    {% if breadcrumbs %}
+    <div class="breadcrumb-container">
+        <nav class="breadcrumb">
+            {% for crumb in breadcrumbs %}
+            {% if loop.last %}
+            <span class="breadcrumb-current">{{ crumb.label }}</span>
+            {% else %}
+            <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+            <span class="breadcrumb-sep">/</span>
+            {% endif %}
+            {% endfor %}
+        </nav>
+    </div>
+    {% endif %}
     <main>
         {% if error %}
         <div class="error-message">{{ error }}</div>

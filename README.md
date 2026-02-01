@@ -2,6 +2,70 @@
 
 ForexTester CSV import, window generation, and TP/SL labeling MVP.
 
+---
+
+## 目的別ガイド（日本語）
+
+### 最短手順
+
+#### A) 画像セット作成（チャート画像 + 特徴量）
+
+```
+1. make up && make migrate     # サービス起動
+2. /ui/import                  # CSVをインポート
+3. /ui/datasets/{id}           # データセット詳細で:
+   - ウィンドウ生成
+   - ラベル生成（TP/SL）
+   - 画像生成
+   - 特徴量生成
+4. /ui/datasets/{id}/images    # ギャラリーで確認
+```
+
+#### B) バックテスト
+
+```
+1. make up && make migrate
+2. /ui/import                  # CSVをインポート
+3. /ui/strategies              # 手法を作成
+4. /ui/strategies/{id}         # バックテスト実行
+5. /ui/runs/{id}               # 結果確認
+```
+
+#### C) ML（機械学習）
+
+```
+1. A) の手順で画像/特徴量を生成
+2. /ui/ml                      # モデルを学習
+3. 推論を実行
+4. /ui/datasets/{id}/images?sort=score_desc  # スコアでソート
+```
+
+### Windows ユーザー向け
+
+PowerShell から簡単に操作できます：
+
+```powershell
+# tools/fxlab.ps1 を使用
+.\tools\fxlab.ps1 up      # サービス起動
+.\tools\fxlab.ps1 logs    # ログ確認
+.\tools\fxlab.ps1 open    # ブラウザでUIを開く
+.\tools\fxlab.ps1 down    # サービス停止
+```
+
+### UI ナビゲーション
+
+| ページ | URL | 説明 |
+|--------|-----|------|
+| ホーム | `/ui` | Getting Started ガイド |
+| インポート | `/ui/import` | CSV アップロード |
+| データセット | `/ui/datasets` | データ管理 |
+| ギャラリー | `/ui/datasets/{id}/images` | チャート画像閲覧 |
+| 手法 | `/ui/strategies` | バックテスト戦略 |
+| ML | `/ui/ml` | 機械学習モデル |
+| 実験室 | `/ui/lab` | チャート分析 |
+
+---
+
 ## Tech Stack
 
 - PostgreSQL 16 + TimescaleDB (bars as hypertable)

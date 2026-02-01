@@ -1,21 +1,74 @@
 {% extends "base.html" %}
 
-{% block title %}FXLab - Home{% endblock %}
+{% block title %}FXLab - ホーム{% endblock %}
 
 {% block content %}
 <div class="container">
     <h1>FXLab Dashboard</h1>
     <p>ForexTester CSV import, window generation, and TP/SL labeling system.</p>
 
-    <div class="cards">
-        <a href="/ui/datasets" class="card">
-            <h2>Datasets</h2>
-            <p>View and manage imported datasets</p>
-        </a>
-        <a href="/ui/import" class="card">
-            <h2>Import CSV</h2>
-            <p>Upload new ForexTester CSV files</p>
-        </a>
-    </div>
+    <section class="getting-started">
+        <h2>Getting Started - 目的別ガイド</h2>
+        <div class="guide-cards">
+            <div class="guide-card">
+                <h3>A) 画像セット作成</h3>
+                <p>チャート画像と特徴量を生成し、MLやギャラリーで分析</p>
+                <ol class="guide-steps">
+                    <li><a href="/ui/import">Import</a> - CSVをインポート</li>
+                    <li><a href="/ui/datasets">Datasets</a> - ウィンドウ生成</li>
+                    <li>ラベル生成（TP/SL）</li>
+                    <li>画像生成</li>
+                    <li>特徴量生成</li>
+                    <li><a href="/ui/datasets">Gallery</a> - 画像を確認</li>
+                </ol>
+            </div>
+            <div class="guide-card">
+                <h3>B) バックテスト</h3>
+                <p>手法を定義してバックテストを実行</p>
+                <ol class="guide-steps">
+                    <li><a href="/ui/import">Import</a> - CSVをインポート</li>
+                    <li><a href="/ui/strategies">Strategies</a> - 手法を作成</li>
+                    <li>バックテスト実行</li>
+                    <li>結果を分析</li>
+                </ol>
+            </div>
+            <div class="guide-card">
+                <h3>C) ML（機械学習）</h3>
+                <p>画像・特徴量でモデルを学習し、スコアで分析</p>
+                <ol class="guide-steps">
+                    <li>画像/特徴量を生成（A参照）</li>
+                    <li><a href="/ui/ml">ML</a> - モデルを学習</li>
+                    <li>推論を実行</li>
+                    <li><a href="/ui/datasets">Gallery</a> - スコアでソート</li>
+                </ol>
+            </div>
+        </div>
+    </section>
+
+    <section class="quick-links">
+        <h2>クイックアクセス</h2>
+        <div class="cards">
+            <a href="/ui/datasets" class="card">
+                <h3>データセット</h3>
+                <p>インポート済みデータの管理</p>
+            </a>
+            <a href="/ui/import" class="card">
+                <h3>インポート</h3>
+                <p>CSVファイルをアップロード</p>
+            </a>
+            <a href="/ui/strategies" class="card">
+                <h3>手法</h3>
+                <p>バックテスト戦略の管理</p>
+            </a>
+            <a href="/ui/ml" class="card">
+                <h3>ML</h3>
+                <p>機械学習モデルの管理</p>
+            </a>
+            <a href="/ui/lab" class="card">
+                <h3>実験室</h3>
+                <p>チャート分析とエントリー記録</p>
+            </a>
+        </div>
+    </section>
 </div>
 {% endblock %}

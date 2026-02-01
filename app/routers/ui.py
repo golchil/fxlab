@@ -369,7 +369,10 @@ def parse_optional_datetime(value: str) -> Optional[datetime]:
 @router.get("", response_class=HTMLResponse)
 def ui_index(request: Request):
     """UI Home page."""
-    return templates.TemplateResponse("ui_index.html", {"request": request})
+    return templates.TemplateResponse("ui_index.html", {
+        "request": request,
+        "nav_active": "home",
+    })
 
 
 @router.get("/datasets", response_class=HTMLResponse)
@@ -380,6 +383,11 @@ def ui_datasets(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("ui_datasets.html", {
         "request": request,
         "datasets": dataset_list,
+        "nav_active": "datasets",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "データセット", "url": None},
+        ],
     })
 
 
@@ -415,6 +423,12 @@ def ui_dataset_detail(request: Request, dataset_id: int, db: Session = Depends(g
         "swings_stats": swings_stats,
         "patterns_stats": patterns_stats,
         "timeframes": timeframes,
+        "nav_active": "datasets",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "データセット", "url": "/ui/datasets"},
+            {"label": dataset_data.name, "url": None},
+        ],
     })
 
 
@@ -426,6 +440,11 @@ def ui_import_form(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("ui_import.html", {
         "request": request,
         "datasets": dataset_list,
+        "nav_active": "import",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "インポート", "url": None},
+        ],
     })
 
 
@@ -1210,6 +1229,13 @@ def ui_insights(
         "feature_ranking": feature_ranking,
         "threshold_suggestions": threshold_suggestions,
         "feat_names": FEATURE_DISPLAY_NAMES,
+        "nav_active": "datasets",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "データセット", "url": "/ui/datasets"},
+            {"label": dataset.name, "url": f"/ui/datasets/{dataset_id}"},
+            {"label": "特徴分析", "url": None},
+        ],
     })
 
 
@@ -1374,6 +1400,13 @@ def ui_image_gallery(
         "sort": sort or "",
         "model_id": model_id,
         "ml_models": ml_model_list,
+        "nav_active": "gallery",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "データセット", "url": "/ui/datasets"},
+            {"label": dataset.name, "url": f"/ui/datasets/{dataset_id}"},
+            {"label": "ギャラリー", "url": None},
+        ],
     })
 
 
@@ -1444,6 +1477,14 @@ def ui_image_detail(
         "prev_id": prev_img[0] if prev_img else None,
         "next_id": next_img[0] if next_img else None,
         "current_label": label,
+        "nav_active": "gallery",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "データセット", "url": "/ui/datasets"},
+            {"label": dataset.name if dataset else "", "url": f"/ui/datasets/{dataset_id}"},
+            {"label": "ギャラリー", "url": f"/ui/datasets/{dataset_id}/images"},
+            {"label": f"画像 #{window_image.id}", "url": None},
+        ],
     })
 
 
@@ -1461,6 +1502,11 @@ def ui_strategies(request: Request, db: Session = Depends(get_db)):
         "datasets": dataset_list,
         "timeframes": timeframes,
         "instruments": instruments,
+        "nav_active": "strategies",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "手法", "url": None},
+        ],
     })
 
 
@@ -1659,6 +1705,12 @@ def ui_strategy_detail(request: Request, strategy_id: int, db: Session = Depends
         "runs": runs,
         "rules": rules,
         "feat_names": FEATURE_DISPLAY_NAMES,
+        "nav_active": "strategies",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "手法", "url": "/ui/strategies"},
+            {"label": strategy.name, "url": None},
+        ],
     })
 
 
@@ -1750,6 +1802,13 @@ def ui_run_detail(request: Request, run_id: int, db: Session = Depends(get_db)):
         "timeframe": timeframe,
         "trades": trades,
         "result": result_summary,
+        "nav_active": "strategies",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "手法", "url": "/ui/strategies"},
+            {"label": strategy.name if strategy else "", "url": f"/ui/strategies/{strategy.id}" if strategy else "/ui/strategies"},
+            {"label": f"Run #{run.id}", "url": None},
+        ],
     })
 
 
@@ -1766,6 +1825,10 @@ def ui_job_detail(request: Request, job_id: int, db: Session = Depends(get_db)):
     return templates.TemplateResponse("ui_job_detail.html", {
         "request": request,
         "job": job,
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": f"ジョブ #{job.id}", "url": None},
+        ],
     })
 
 
@@ -1814,6 +1877,11 @@ def ui_lab(
         "end_ts": end_ts or "",
         "instrument_id": instrument_id,
         "entry_points": entry_points,
+        "nav_active": "lab",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "実験室", "url": None},
+        ],
     })
 
 
@@ -2037,6 +2105,12 @@ def ui_lab_entries(
         "selected_dataset_id": dataset_id,
         "selected_side": side or "",
         "selected_label": label or "",
+        "nav_active": "lab",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "実験室", "url": "/ui/lab"},
+            {"label": "エントリー一覧", "url": None},
+        ],
     })
 
 
@@ -2260,6 +2334,12 @@ def ui_lab_suggest_rules(
         "feature_ranking": feature_ranking,
         "threshold_suggestions": threshold_suggestions,
         "feat_names": FEATURE_DISPLAY_NAMES,
+        "nav_active": "lab",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "実験室", "url": "/ui/lab"},
+            {"label": "ルール提案", "url": None},
+        ],
     })
 
 
@@ -2376,6 +2456,11 @@ def ui_ml(request: Request, db: Session = Depends(get_db)):
         "datasets": dataset_list,
         "timeframes": timeframes,
         "pattern_label_counts": pattern_label_counts,
+        "nav_active": "ml",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "ML", "url": None},
+        ],
     })
 
 
@@ -2682,6 +2767,12 @@ def ui_ml_detail(request: Request, model_id: int, db: Session = Depends(get_db))
         "score_count": score_count,
         "dataset": dataset,
         "timeframe": timeframe,
+        "nav_active": "ml",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "ML", "url": "/ui/ml"},
+            {"label": ml_model.name, "url": None},
+        ],
     })
 
 
@@ -3201,6 +3292,14 @@ def ui_trade_detail(
         "htf_timeframe": htf_timeframe,
         "prev_trade_id": prev_trade.id if prev_trade else None,
         "next_trade_id": next_trade.id if next_trade else None,
+        "nav_active": "strategies",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "手法", "url": "/ui/strategies"},
+            {"label": strategy.name if strategy else "", "url": f"/ui/strategies/{strategy.id}" if strategy else "/ui/strategies"},
+            {"label": f"Run #{run.id}" if run else "", "url": f"/ui/runs/{run.id}" if run else ""},
+            {"label": f"Trade #{trade.id}", "url": None},
+        ],
     })
 
 
@@ -3521,6 +3620,12 @@ def ui_lab_patterns(
         "selected_sort": sort or "confirmed_ts",
         "selected_min_ml_score": min_ml_score_val,
         "selected_label_filter": label_filter,
+        "nav_active": "lab",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "実験室", "url": "/ui/lab"},
+            {"label": "パターン一覧", "url": None},
+        ],
     })
 
 
@@ -3607,6 +3712,13 @@ def ui_lab_pattern_detail(
         "timeframe": timeframe,
         "labels": labels,
         "ltf_options": ltf_options,
+        "nav_active": "lab",
+        "breadcrumbs": [
+            {"label": "ホーム", "url": "/ui"},
+            {"label": "実験室", "url": "/ui/lab"},
+            {"label": "パターン一覧", "url": "/ui/lab/patterns"},
+            {"label": f"{pattern.pattern_type} #{pattern.id}", "url": None},
+        ],
     })
 
 

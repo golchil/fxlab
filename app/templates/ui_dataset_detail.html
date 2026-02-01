@@ -9,6 +9,65 @@
         <a href="/ui/datasets" class="btn">&larr; 一覧に戻る</a>
     </div>
 
+    <section class="step-progress">
+        <h2>ワークフロー進捗</h2>
+        <div class="progress-steps">
+            <div class="progress-step {% if windows_stats.total_windows > 0 %}completed{% else %}pending{% endif %}">
+                <div class="step-icon">1</div>
+                <div class="step-info">
+                    <span class="step-label">Windows</span>
+                    <span class="step-count">{{ windows_stats.total_windows }} 件</span>
+                </div>
+                {% if windows_stats.total_windows == 0 %}
+                <a href="#windows-form" class="btn btn-primary btn-small step-action">生成する</a>
+                {% endif %}
+            </div>
+            <div class="progress-arrow">&rarr;</div>
+            <div class="progress-step {% if labels_stats.total_labels > 0 %}completed{% elif windows_stats.total_windows > 0 %}pending{% else %}disabled{% endif %}">
+                <div class="step-icon">2</div>
+                <div class="step-info">
+                    <span class="step-label">Labels</span>
+                    <span class="step-count">{{ labels_stats.total_labels }} 件</span>
+                </div>
+                {% if labels_stats.total_labels == 0 and windows_stats.total_windows > 0 %}
+                <a href="#labels-form" class="btn btn-primary btn-small step-action">生成する</a>
+                {% endif %}
+            </div>
+            <div class="progress-arrow">&rarr;</div>
+            <div class="progress-step {% if images_stats.total_images > 0 %}completed{% elif windows_stats.total_windows > 0 %}pending{% else %}disabled{% endif %}">
+                <div class="step-icon">3</div>
+                <div class="step-info">
+                    <span class="step-label">Images</span>
+                    <span class="step-count">{{ images_stats.total_images }} 件</span>
+                </div>
+                {% if images_stats.total_images == 0 and windows_stats.total_windows > 0 %}
+                <a href="#images-form" class="btn btn-primary btn-small step-action">生成する</a>
+                {% endif %}
+            </div>
+            <div class="progress-arrow">&rarr;</div>
+            <div class="progress-step {% if features_stats.total_features > 0 %}completed{% elif windows_stats.total_windows > 0 %}pending{% else %}disabled{% endif %}">
+                <div class="step-icon">4</div>
+                <div class="step-info">
+                    <span class="step-label">Features</span>
+                    <span class="step-count">{{ features_stats.total_features }} 件</span>
+                </div>
+                {% if features_stats.total_features == 0 and windows_stats.total_windows > 0 %}
+                <a href="#features-form" class="btn btn-primary btn-small step-action">生成する</a>
+                {% endif %}
+            </div>
+            <div class="progress-arrow">&rarr;</div>
+            <div class="progress-step {% if images_stats.total_images > 0 %}completed{% else %}disabled{% endif %}">
+                <div class="step-icon">5</div>
+                <div class="step-info">
+                    <span class="step-label">Gallery</span>
+                </div>
+                {% if images_stats.total_images > 0 %}
+                <a href="/ui/datasets/{{ dataset.id }}/images" class="btn btn-primary btn-small step-action">見る</a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
     <section class="info-section">
         <h2>データセット情報</h2>
         <div class="info-grid">
@@ -191,7 +250,7 @@
     <section class="actions-section">
         <h2>生成</h2>
         <div class="forms-row">
-            <div class="form-box">
+            <div class="form-box" id="windows-form">
                 <h3>ウィンドウ生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/windows" method="post">
                     <div class="form-group">
@@ -217,7 +276,7 @@
                     <button type="submit" class="btn btn-primary">ウィンドウ生成</button>
                 </form>
             </div>
-            <div class="form-box">
+            <div class="form-box" id="labels-form">
                 <h3>ラベル生成（TP/SL）</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/labels" method="post">
                     <div class="form-group">
@@ -247,7 +306,7 @@
                     <button type="submit" class="btn btn-primary">ラベル生成</button>
                 </form>
             </div>
-            <div class="form-box">
+            <div class="form-box" id="images-form">
                 <h3>画像生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/images" method="post">
                     <div class="form-group">
@@ -278,7 +337,7 @@
                     <button type="submit" class="btn btn-primary">画像生成</button>
                 </form>
             </div>
-            <div class="form-box">
+            <div class="form-box" id="features-form">
                 <h3>特徴量生成</h3>
                 <form action="/ui/datasets/{{ dataset.id }}/features" method="post">
                     <div class="form-group">
