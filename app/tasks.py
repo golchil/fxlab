@@ -2293,19 +2293,20 @@ def detect_patterns_task(
     self, job_id: int, dataset_id: int,
     timeframe: str,
     pattern_types: list = None,  # ["double_bottom", "double_top"]
-    tolerance_pct: float = 0.02,
-    min_bars_between: int = 5,
+    tolerance_pct: float = 0.04,
+    min_bars_between: int = 3,
     start_ts: str = None,
     end_ts: str = None,
     overwrite: bool = False
 ):
     """
     チャートパターン（ダブルボトム/ダブルトップ）を検出する。
+    スイングポイントがない場合は自動生成して続行する。
 
     Args:
         pattern_types: 検出するパターンタイプのリスト（デフォルト: 両方）
-        tolerance_pct: 左右の山/谷の価格差許容範囲（デフォルト: 2%）
-        min_bars_between: 左右間の最小バー数
+        tolerance_pct: 左右の山/谷の価格差許容範囲（デフォルト: 4%）
+        min_bars_between: 左右間の最小バー数（デフォルト: 3）
         overwrite: True なら既存を削除して再生成
     """
     db = SessionLocal()
@@ -2341,28 +2342,7 @@ def detect_patterns_task(
                 ).delete()
             db.commit()
 
-        # スイングポイント取得
-        swings_q = (
-            db.query(SwingPoint.confirmed_ts, SwingPoint.kind, SwingPoint.price, SwingPoint.ts)
-            .filter(
-                SwingPoint.dataset_id == dataset_id,
-                SwingPoint.instrument_id == instrument.id,
-                SwingPoint.timeframe_id == tf.id,
-            )
-            .order_by(SwingPoint.ts)
-            .all()
-        )
-
-        if not swings_q:
-            job.status = "completed"
-            job.result = json.dumps({"status": "no_swings", "message": "スイングポイントがありません。先に生成してください。"})
-            db.commit()
-            return {"status": "no_swings", "count": 0}
-
-        swing_highs = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "high"]
-        swing_lows = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "low"]
-
-        # バー取得
+        # バー取得（スイング生成にも使うので先に取得）
         query = db.query(Bar).filter(
             Bar.dataset_id == dataset_id,
             Bar.instrument_id == instrument.id,
@@ -2384,6 +2364,46 @@ def detect_patterns_task(
             return {"status": "no_bars", "count": 0}
 
         bar_data = [(b.ts, b.open, b.high, b.low, b.close) for b in bars]
+
+        # スイングポイント取得
+        swings_q = (
+            db.query(SwingPoint.confirmed_ts, SwingPoint.kind, SwingPoint.price, SwingPoint.ts)
+            .filter(
+                SwingPoint.dataset_id == dataset_id,
+                SwingPoint.instrument_id == instrument.id,
+                SwingPoint.timeframe_id == tf.id,
+            )
+            .order_by(SwingPoint.ts)
+            .all()
+        )
+
+        swings_auto_generated = False
+        if not swings_q:
+            # スイングポイントがない場合は自動生成（メモリ上のみ）
+            # ATR14を計算してしきい値を決定
+            highs = [b.high for b in bars]
+            lows = [b.low for b in bars]
+            closes = [b.close for b in bars]
+
+            tr_list = []
+            for i in range(1, min(15, len(bars))):
+                high_low = highs[i] - lows[i]
+                high_prev = abs(highs[i] - closes[i - 1])
+                low_prev = abs(lows[i] - closes[i - 1])
+                tr_list.append(max(high_low, high_prev, low_prev))
+
+            atr14 = sum(tr_list) / len(tr_list) if tr_list else 0.001
+            threshold = atr14 * 1.0  # ATR x 1.0
+
+            # ZigZagでスイング生成（min_bars=3で出やすく）
+            swings_raw = zigzag_swing_detection(bar_data, threshold, min_bars=3)
+
+            # swings_qと同じ形式に変換: (confirmed_ts, kind, price, ts)
+            swings_q = [(confirmed_ts, kind, price, ts) for ts, confirmed_ts, kind, price in swings_raw]
+            swings_auto_generated = True
+
+        swing_highs = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "high"]
+        swing_lows = [(confirmed_ts, price, ts) for confirmed_ts, kind, price, ts in swings_q if kind == "low"]
 
         # パターン検出
         detected = detect_double_patterns(
@@ -2449,6 +2469,7 @@ def detect_patterns_task(
             "timeframe": timeframe,
             "tolerance_pct": tolerance_pct,
             "min_bars_between": min_bars_between,
+            "swings_auto_generated": swings_auto_generated,
         }
 
         job.status = "completed"

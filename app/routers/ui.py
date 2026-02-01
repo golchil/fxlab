@@ -1017,8 +1017,8 @@ def ui_create_patterns(
     dataset_id: int,
     timeframe: str = Form("H1"),
     pattern_types: list = Form(["double_bottom", "double_top"]),
-    tolerance_pct: float = Form(0.02),
-    min_bars_between: int = Form(5),
+    tolerance_pct: float = Form(0.04),
+    min_bars_between: int = Form(3),
     overwrite: Optional[str] = Form(None),
     start_ts: Optional[str] = Form(None),
     end_ts: Optional[str] = Form(None),
@@ -1037,6 +1037,9 @@ def ui_create_patterns(
         # Handle pattern_types from form (may be comma-separated string or list)
         if isinstance(pattern_types, str):
             pattern_types = [pt.strip() for pt in pattern_types.split(",") if pt.strip()]
+        elif isinstance(pattern_types, list) and len(pattern_types) == 1 and "," in pattern_types[0]:
+            # Form submits as list with single comma-separated string
+            pattern_types = [pt.strip() for pt in pattern_types[0].split(",") if pt.strip()]
 
         params = {
             "timeframe": timeframe,
